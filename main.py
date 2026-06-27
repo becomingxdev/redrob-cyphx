@@ -1,30 +1,42 @@
+"""Application entry point for the REDROB AI Candidate Ranking Engine."""
+
+from pathlib import Path
+
+from src.parser.loader import load_candidates
 from src.utils.banner import print_banner
-from src.parser.loader import CandidateLoader
-from src.parser.validator import CandidateValidator
-from src.models.factory import CandidateFactory
+
+DATASET_PATH = "data/candidates.jsonl"
 
 
 def main() -> None:
-    """Application entry point."""
+    """Load, count, and display a summary of parsed candidates."""
 
-    # Display application banner
     print_banner()
 
-    # Load candidate data
-    candidates = CandidateLoader.load("data/sample_candidates.json")
-    print(f"\nLoaded {len(candidates)} candidates.")
+    dataset = Path(DATASET_PATH)
+    if not dataset.exists():
+        print(f"\nDataset not found: {DATASET_PATH}")
+        return
 
-    # Validate candidates
-    candidate_objects = []
-    for candidate in candidates:
-        if CandidateValidator.validate(candidate):
-            candidate_objects.append(
-                CandidateFactory.create(candidate)
-            )
-    
-    print(f"Candidate objects: {len(candidate_objects)}")
-    print("\nFirst candidate:\n")
-    print(candidate_objects[0])
+    print(f"\nLoading dataset: {DATASET_PATH} ...")
+
+    count = 0
+    first: object | None = None
+
+    for candidate in load_candidates(DATASET_PATH):
+        count += 1
+        if count == 1:
+            first = candidate
+
+    if count == 0:
+        print("\nNo valid candidates were found.")
+        return
+
+    print("\nFirst Candidate\n")
+    print(first)
+    print("\n" + "-" * 40)
+    print(f"\nSuccessfully loaded: {count} candidates\n")
+
 
 if __name__ == "__main__":
     main()
