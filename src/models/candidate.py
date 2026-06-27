@@ -1,8 +1,8 @@
 from dataclasses import dataclass
-
+from src.models.profile import Profile
 
 @dataclass(slots=True)
 class Candidate:
-    """Internal representation of a candidate."""
-
+    candidate_id: str
+    profile: Profile
     raw: dict
