@@ -1,10 +1,12 @@
 from src.utils.banner import print_banner
+from src.parser.loader import CandidateLoader
 
 
 def main():
     print_banner()
-    print()
-    print("Project initialized successfully.")
+    candidates = CandidateLoader.load("data/sample.jsonl")
+    print(f"\nLoaded {len(candidates)} candidates.")
+    print(candidates)
 
 
 if __name__ == "__main__":

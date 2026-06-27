@@ -30,3 +30,11 @@ output/
 
 # Environment variables
 .env
+
+output/*
+!output/.gitkeep
+
+# data
+sample.json
+sample.jsonl
+candidates.jsonl
