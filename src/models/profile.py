@@ -3,6 +3,8 @@ from dataclasses import dataclass
 
 @dataclass(slots=True)
 class Profile:
+    """Professional profile information for a candidate."""
+
     anonymized_name: str
     headline: str
     summary: str
