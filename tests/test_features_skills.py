@@ -1,7 +1,17 @@
+"""Tests for the multi-source SkillsExtractor.
+
+Original test classes are preserved **unchanged** so that backward compatibility
+is continuously verified. New test classes cover the multi-source pipeline.
+"""
+
 import pytest
 from src.models.factory import CandidateFactory
 from src.features.skills import SkillsExtractor
 
+
+# ---------------------------------------------------------------------------
+# Shared fixture
+# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def base_candidate_dict() -> dict:
@@ -51,6 +61,57 @@ def base_candidate_dict() -> dict:
         },
     }
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _make_skill(
+    name: str,
+    proficiency: str,
+    endorsements: int,
+    duration_months: int | None,
+) -> dict:
+    """Create a minimal skill entry dict."""
+    return {
+        "name": name,
+        "proficiency": proficiency,
+        "endorsements": endorsements,
+        "duration_months": duration_months,
+    }
+
+
+def _make_role(
+    company: str = "Acme",
+    title: str = "Engineer",
+    description: str = "",
+    industry: str = "Tech",
+) -> dict:
+    return {
+        "company": company,
+        "title": title,
+        "start_date": "2021-01-01",
+        "end_date": "2023-01-01",
+        "duration_months": 24,
+        "is_current": False,
+        "industry": industry,
+        "company_size": "100-500",
+        "description": description,
+    }
+
+
+def _make_cert(name: str, issuer: str = "Coursera", year: int = 2023) -> dict:
+    return {"name": name, "issuer": issuer, "year": year}
+
+
+def _by_name(multi: list[dict], name: str) -> dict | None:
+    """Return the first record whose ``name`` equals ``name``."""
+    return next((r for r in multi if r["name"] == name), None)
+
+
+# ===========================================================================
+# ORIGINAL TESTS — preserved unchanged for backward compatibility
+# ===========================================================================
 
 class TestSkillsExtraction:
     """Original tests — basic extraction and empty handling."""
@@ -264,20 +325,320 @@ class TestSkillsDeterminism:
         assert extractor.extract(candidate) == extractor.extract(candidate)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# ===========================================================================
+# NEW TESTS — multi-source pipeline
+# ===========================================================================
 
-def _make_skill(
-    name: str,
-    proficiency: str,
-    endorsements: int,
-    duration_months: int | None,
-) -> dict:
-    """Create a minimal skill entry dict."""
-    return {
-        "name": name,
-        "proficiency": proficiency,
-        "endorsements": endorsements,
-        "duration_months": duration_months,
-    }
+class TestMultiSourceKeyPresent:
+    """multi_source_skills key must always be present and be a list."""
+
+    def test_key_always_present_empty_candidate(self, base_candidate_dict) -> None:
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        assert "multi_source_skills" in features
+        assert isinstance(features["multi_source_skills"], list)
+
+    def test_record_shape(self, base_candidate_dict) -> None:
+        """Each record must have the five required keys."""
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        for record in features["multi_source_skills"]:
+            for key in ("name", "normalized_name", "sources", "occurrences", "contexts"):
+                assert key in record, f"Missing key '{key}' in {record}"
+
+
+class TestMultiSourceExtraction:
+    """Skills should be extracted from headline, summary, career, projects, certs."""
+
+    def test_skill_extracted_from_headline(self, base_candidate_dict) -> None:
+        base_candidate_dict["profile"]["headline"] = "Backend Engineer | Python | Kafka"
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        multi = features["multi_source_skills"]
+
+        # Python from both skills list and headline
+        python_rec = _by_name(multi, "python")
+        assert python_rec is not None
+        assert "headline" in python_rec["sources"]
+        assert "skills" in python_rec["sources"]
+
+    def test_skill_extracted_from_summary(self, base_candidate_dict) -> None:
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        base_candidate_dict["profile"]["summary"] = "Expert in Python, Airflow, and dbt."
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        names = [r["name"] for r in features["multi_source_skills"]]
+        assert "python" in names
+
+    def test_skill_extracted_from_career_description(self, base_candidate_dict) -> None:
+        """A skill mentioned only in career description must be extracted."""
+        base_candidate_dict["career_history"] = [
+            _make_role(
+                title="Data Engineer",
+                description="Implemented Kafka streaming pipelines and built dbt models.",
+            )
+        ]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        names = [r["name"] for r in features["multi_source_skills"]]
+        # "kafka streaming" normalizes to "Apache Kafka"
+        assert "apache kafka" in names
+
+    def test_skill_extracted_from_career_title(self, base_candidate_dict) -> None:
+        """A known skill in the role title must be extracted."""
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        base_candidate_dict["career_history"] = [
+            _make_role(title="Python Backend Engineer", description="")
+        ]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        python_rec = _by_name(features["multi_source_skills"], "python")
+        assert python_rec is not None
+        assert "career_history" in python_rec["sources"]
+
+    def test_skill_extracted_from_projects_string_list(self, base_candidate_dict) -> None:
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        base_candidate_dict["projects"] = [
+            "Built a Python web scraper using Airflow"
+        ]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        python_rec = _by_name(features["multi_source_skills"], "python")
+        assert python_rec is not None
+        assert "projects" in python_rec["sources"]
+
+    def test_skill_extracted_from_projects_dict_list(self, base_candidate_dict) -> None:
+        base_candidate_dict["skills"] = [_make_skill("Docker", "intermediate", 3, 12)]
+        base_candidate_dict["projects"] = [
+            {"name": "CI pipeline", "tech": ["Docker", "Kubernetes"]}
+        ]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        docker_rec = _by_name(features["multi_source_skills"], "docker")
+        assert docker_rec is not None
+        assert "projects" in docker_rec["sources"]
+
+    def test_skill_extracted_from_certifications(self, base_candidate_dict) -> None:
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        base_candidate_dict["certifications"] = [
+            _make_cert("AWS Certified Solutions Architect")
+        ]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        # "aws" should appear — from "AWS Certified Solutions Architect" cert name
+        names = [r["name"] for r in features["multi_source_skills"]]
+        assert "aws" in names
+
+    def test_skill_not_in_explicit_list_but_in_career_appears(self, base_candidate_dict) -> None:
+        """Core requirement: career-only skills must appear even if absent from skills list."""
+        base_candidate_dict["skills"] = []
+        base_candidate_dict["career_history"] = [
+            _make_role(
+                title="Data Engineer",
+                description=(
+                    "Used PySpark for batch processing. "
+                    "Built Airflow DAGs. "
+                    "Wrote dbt models. "
+                    "Stored data in Snowflake."
+                ),
+            )
+        ]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        names = [r["name"] for r in features["multi_source_skills"]]
+        # pyspark → "apache spark"
+        assert "apache spark" in names
+        assert "airflow" in names
+        assert "dbt" in names
+        assert "snowflake" in names
+
+
+class TestNormalization:
+    """Alias normalization must produce the canonical display name."""
+
+    def test_pyspark_normalizes_to_apache_spark(self, base_candidate_dict) -> None:
+        base_candidate_dict["skills"] = [_make_skill("PySpark", "advanced", 5, 24)]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        rec = _by_name(features["multi_source_skills"], "apache spark")
+        assert rec is not None
+        assert rec["normalized_name"] == "Apache Spark"
+
+    def test_amazon_web_services_normalizes_to_aws(self, base_candidate_dict) -> None:
+        base_candidate_dict["profile"]["headline"] = "Amazon Web Services | Python"
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        names = [r["name"] for r in features["multi_source_skills"]]
+        assert "aws" in names
+
+    def test_kafka_streaming_normalizes_to_apache_kafka(self, base_candidate_dict) -> None:
+        base_candidate_dict["career_history"] = [
+            _make_role(description="Built Kafka streaming pipelines.")
+        ]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        names = [r["name"] for r in features["multi_source_skills"]]
+        assert "apache kafka" in names
+
+    def test_google_cloud_platform_normalizes_to_gcp(self, base_candidate_dict) -> None:
+        base_candidate_dict["profile"]["headline"] = "Google Cloud Platform | DevOps"
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        names = [r["name"] for r in features["multi_source_skills"]]
+        assert "gcp" in names
+
+    def test_normalized_name_preserved_in_record(self, base_candidate_dict) -> None:
+        base_candidate_dict["skills"] = [_make_skill("PySpark", "advanced", 5, 24)]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        rec = _by_name(features["multi_source_skills"], "apache spark")
+        assert rec is not None
+        assert rec["normalized_name"] == "Apache Spark"
+
+    def test_skills_list_uses_normalized_names_as_keys(self, base_candidate_dict) -> None:
+        """The flat 'skills' list must use the lower-cased normalized name, not the raw alias."""
+        base_candidate_dict["skills"] = [_make_skill("PySpark", "advanced", 5, 24)]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        # "pyspark" alias → "Apache Spark" → key is "apache spark"
+        assert "apache spark" in features["skills"]
+        assert "pyspark" not in features["skills"]
+
+
+class TestSoftSkillFiltering:
+    """Soft skills from the blocklist must not appear in extracted results."""
+
+    def test_communication_not_extracted_from_headline(self, base_candidate_dict) -> None:
+        base_candidate_dict["profile"]["headline"] = "Communication | Python | Leadership"
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        names = [r["name"] for r in features["multi_source_skills"]]
+        assert "communication" not in names
+        assert "leadership" not in names
+
+    def test_soft_skills_not_extracted_from_career(self, base_candidate_dict) -> None:
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        base_candidate_dict["career_history"] = [
+            _make_role(
+                description=(
+                    "Strong communication skills. Used Python for data analysis. "
+                    "Leadership and teamwork across departments."
+                )
+            )
+        ]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        names = [r["name"] for r in features["multi_source_skills"]]
+        assert "communication" not in names
+        assert "teamwork" not in names
+        assert "python" in names
+
+
+class TestDeduplication:
+    """Same skill from multiple sources must produce one record with all sources listed."""
+
+    def test_skill_from_two_sources_deduped(self, base_candidate_dict) -> None:
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        base_candidate_dict["profile"]["summary"] = "Python and SQL expert."
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+
+        python_records = [r for r in features["multi_source_skills"] if r["name"] == "python"]
+        assert len(python_records) == 1, "Python must appear exactly once even across sources"
+        assert "skills" in python_records[0]["sources"]
+        assert "summary" in python_records[0]["sources"]
+
+    def test_occurrences_accumulate_across_sources(self, base_candidate_dict) -> None:
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        base_candidate_dict["profile"]["headline"] = "Python developer"
+        base_candidate_dict["profile"]["summary"] = "Python, SQL"
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        python_rec = _by_name(features["multi_source_skills"], "python")
+        assert python_rec is not None
+        assert python_rec["occurrences"] >= 3  # skills + headline + summary
+
+    def test_unique_skills_count_reflects_union(self, base_candidate_dict) -> None:
+        """unique_skills should equal the number of distinct skills across ALL sources."""
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        base_candidate_dict["career_history"] = [
+            _make_role(description="Used Airflow for orchestration. Built dbt models.")
+        ]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        # python + airflow + dbt = at least 3
+        assert features["unique_skills"] >= 3
+
+
+class TestContextCapture:
+    """Context snippets must be populated and bounded."""
+
+    def test_context_populated_for_career_skill(self, base_candidate_dict) -> None:
+        base_candidate_dict["skills"] = [_make_skill("Airflow", "intermediate", 2, 12)]
+        base_candidate_dict["career_history"] = [
+            _make_role(description="Developed Airflow DAGs for data orchestration.")
+        ]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        airflow_rec = _by_name(features["multi_source_skills"], "airflow")
+        assert airflow_rec is not None
+        # At least one context snippet must be non-empty
+        assert any(len(c) > 0 for c in airflow_rec["contexts"])
+
+    def test_context_length_bounded(self, base_candidate_dict) -> None:
+        long_desc = "A " * 200 + "Python " + "B " * 200
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        base_candidate_dict["career_history"] = [_make_role(description=long_desc)]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        python_rec = _by_name(features["multi_source_skills"], "python")
+        assert python_rec is not None
+        for ctx in python_rec["contexts"]:
+            assert len(ctx) <= 120
+
+    def test_max_contexts_respected(self, base_candidate_dict) -> None:
+        """No skill should accumulate more than max_contexts snippets."""
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        base_candidate_dict["career_history"] = [
+            _make_role(description=f"Role {i}: Used Python for task {i}.")
+            for i in range(10)
+        ]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        python_rec = _by_name(features["multi_source_skills"], "python")
+        assert python_rec is not None
+        # default max_contexts = 3
+        assert len(python_rec["contexts"]) <= 3
+
+
+class TestMultiSourceDeterminism:
+    """Repeated calls on the same candidate must return identical results."""
+
+    def test_deterministic_with_all_sources(self, base_candidate_dict) -> None:
+        base_candidate_dict["skills"] = [_make_skill("Python", "advanced", 5, 24)]
+        base_candidate_dict["profile"]["headline"] = "Python | Spark | Kafka"
+        base_candidate_dict["profile"]["summary"] = "Python, dbt, Airflow"
+        base_candidate_dict["career_history"] = [
+            _make_role(description="PySpark jobs and Kafka streaming pipelines.")
+        ]
+        base_candidate_dict["projects"] = [{"name": "ETL", "tech": ["Airflow"]}]
+        base_candidate_dict["certifications"] = [_make_cert("AWS Certified Developer")]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        extractor = SkillsExtractor()
+        result1 = extractor.extract(candidate)
+        result2 = extractor.extract(candidate)
+        assert result1 == result2
+
+    def test_multi_source_skills_sorted_by_name(self, base_candidate_dict) -> None:
+        base_candidate_dict["skills"] = [
+            _make_skill("Spark", "advanced", 5, 24),
+            _make_skill("Airflow", "intermediate", 3, 12),
+        ]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        features = SkillsExtractor().extract(candidate)
+        names = [r["name"] for r in features["multi_source_skills"]]
+        assert names == sorted(names)

@@ -1,0 +1,226 @@
+# Skill normalization rules for the multi-source SkillsExtractor.
+#
+# aliases
+#   Keys are lower-cased raw/alias forms found in free text.
+#   Values are the canonical display name to use in output.
+#   The extractor always lower-cases both sides before matching.
+#
+# soft_skills
+#   Tokens that appear in free text but should NOT be extracted as skills.
+#   Checked after tokenization, before normalization.
+#
+# extraction
+#   Tunables controlling the free-text tokenizer behaviour.
+
+# ---------------------------------------------------------------------------
+# Alias → Canonical normalization map
+# ---------------------------------------------------------------------------
+aliases:
+  # Apache Spark family
+  pyspark: "Apache Spark"
+  "spark streaming": "Apache Spark"
+  "spark ml": "Apache Spark"
+  "spark sql": "Apache Spark"
+  "apache spark streaming": "Apache Spark"
+
+  # Apache Kafka family
+  "kafka streams": "Apache Kafka"
+  "kafka streaming": "Apache Kafka"
+  "apache kafka streaming": "Apache Kafka"
+  "schema registry": "Apache Kafka"
+
+  # Apache Airflow
+  "airflow orchestration": "Airflow"
+  "apache airflow": "Airflow"
+
+  # dbt
+  "dbt models": "dbt"
+  "dbt core": "dbt"
+  "data build tool": "dbt"
+
+  # Cloud — AWS
+  "amazon web services": "AWS"
+  "aws ec2": "AWS"
+  "aws s3": "AWS"
+  "aws lambda": "AWS"
+  "aws glue": "AWS"
+  "amazon s3": "AWS"
+  "amazon ec2": "AWS"
+  "amazon rds": "AWS"
+
+  # Cloud — GCP
+  "google cloud platform": "GCP"
+  "google cloud": "GCP"
+  "gcp bigquery": "GCP"
+  "bigquery": "BigQuery"
+  "google bigquery": "BigQuery"
+
+  # Cloud — Azure
+  "microsoft azure": "Azure"
+  "azure devops": "Azure"
+
+  # SQL variants
+  "sql server": "SQL"
+  "microsoft sql server": "SQL"
+  "t-sql": "SQL"
+  "tsql": "SQL"
+  "pl/sql": "SQL"
+  "plsql": "SQL"
+  "mysql": "MySQL"
+  "postgresql": "PostgreSQL"
+  "postgres": "PostgreSQL"
+
+  # ML / LLM
+  "llm fine tuning": "Fine-tuning LLMs"
+  "fine tuning llms": "Fine-tuning LLMs"
+  "lora fine tuning": "Fine-tuning LLMs"
+  "rlhf": "Fine-tuning LLMs"
+  "large language models": "LLMs"
+  "large language model": "LLMs"
+  "transformer models": "Transformers"
+  "hugging face": "Hugging Face"
+  "huggingface": "Hugging Face"
+
+  # Deep learning frameworks
+  "tensorflow 2": "TensorFlow"
+  "tf": "TensorFlow"
+  "pytorch lightning": "PyTorch"
+  "torch": "PyTorch"
+
+  # MLOps / Experiment tracking
+  "weights and biases": "Weights & Biases"
+  "wandb": "Weights & Biases"
+  "mlflow tracking": "MLflow"
+
+  # Data pipelines
+  "apache beam": "Apache Beam"
+  "beam pipelines": "Apache Beam"
+  "feature pipelines": "Feature Engineering"
+  "feature engineering": "Feature Engineering"
+  "feature stores": "Feature Engineering"
+
+  # Containers / Infra
+  "kubernetes": "Kubernetes"
+  "k8s": "Kubernetes"
+  "docker containers": "Docker"
+  "docker compose": "Docker"
+  "terraform iac": "Terraform"
+
+  # Databases / warehouses
+  "snowflake warehouse": "Snowflake"
+  "snowflake warehouses": "Snowflake"
+  "snowflake data warehouse": "Snowflake"
+  "redshift": "Amazon Redshift"
+  "amazon redshift": "Amazon Redshift"
+
+  # Data quality / observability
+  "data quality": "Data Quality"
+  "schema drift detection": "Data Quality"
+  "data observability": "Data Quality"
+
+  # NLP
+  "natural language processing": "NLP"
+  "nlp pipelines": "NLP"
+  "speech to text": "Speech Recognition"
+  "asr": "Speech Recognition"
+  "text to speech": "TTS"
+
+  # Computer vision
+  "image classification": "Computer Vision"
+  "object detection": "Computer Vision"
+  "computer vision models": "Computer Vision"
+
+  # Web / Backend
+  "django rest framework": "Django"
+  "django rest": "Django"
+  "flask api": "Flask"
+  "fastapi framework": "FastAPI"
+  "node.js": "Node.js"
+  "nodejs": "Node.js"
+  "express.js": "Express.js"
+  "expressjs": "Express.js"
+  "nextjs": "Next.js"
+  "next.js framework": "Next.js"
+  "tailwind css": "Tailwind"
+  "tailwindcss": "Tailwind"
+  "reactjs": "React"
+  "react.js": "React"
+  "vuejs": "Vue.js"
+  "vue.js framework": "Vue.js"
+  "angularjs": "Angular"
+
+  # Languages
+  "python3": "Python"
+  "python 3": "Python"
+  "golang": "Go"
+  "c sharp": "C#"
+  "c plus plus": "C++"
+
+  # CI/CD
+  "ci/cd pipelines": "CI/CD"
+  "cicd": "CI/CD"
+  "github actions": "CI/CD"
+  "gitlab ci": "CI/CD"
+  "jenkins pipelines": "CI/CD"
+
+  # Vector / search
+  "vector database": "Vector DB"
+  "vector databases": "Vector DB"
+  "pinecone": "Vector DB"
+  "weaviate": "Vector DB"
+  "qdrant": "Vector DB"
+
+# ---------------------------------------------------------------------------
+# Soft-skill blocklist — tokens to ignore during free-text extraction
+# ---------------------------------------------------------------------------
+soft_skills:
+  - "communication"
+  - "leadership"
+  - "teamwork"
+  - "collaboration"
+  - "problem solving"
+  - "problem-solving"
+  - "critical thinking"
+  - "time management"
+  - "adaptability"
+  - "creativity"
+  - "attention to detail"
+  - "analytical"
+  - "organised"
+  - "organized"
+  - "motivated"
+  - "dedicated"
+  - "proactive"
+  - "fast learner"
+  - "quick learner"
+  - "self-starter"
+  - "multitasking"
+  - "interpersonal"
+  - "work ethic"
+  - "positive attitude"
+  - "responsible"
+  - "reliable"
+  - "flexible"
+  - "innovative"
+  - "detail oriented"
+  - "team player"
+  - "cross-functional"
+  - "stakeholder"
+  - "mentoring"
+  - "mentorship"
+  - "coaching"
+  - "ownership"
+  - "passion"
+
+# ---------------------------------------------------------------------------
+# Extraction tuning parameters
+# ---------------------------------------------------------------------------
+extraction:
+  # Minimum character length for a free-text token to be considered a skill
+  min_token_length: 2
+  # Maximum number of whitespace-separated words a multi-word skill phrase can have
+  max_tokens_per_skill: 4
+  # Max context snippet length (chars) stored per occurrence
+  max_context_length: 120
+  # Max number of context snippets stored per skill
+  max_contexts: 3
