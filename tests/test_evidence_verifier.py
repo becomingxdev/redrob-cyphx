@@ -119,15 +119,19 @@ class TestVerifierStructure:
 class TestVerifierSkillsSource:
     """The 'skills' source reflects the explicit skills list."""
 
-    def test_skill_always_supported_by_skills_source(self, base_candidate_dict) -> None:
-        base_candidate_dict["skills"] = [_make_skill("Python")]
+    def test_skill_in_career_history_company(self, base_candidate_dict) -> None:
+        """
+        Company names are no longer treated as skill evidence.
+        The verifier trusts the SkillsExtractor metadata rather than reparsing
+        arbitrary text fields such as company names.
+        """
+        base_candidate_dict["skills"] = [_make_skill("Acme")]
+        base_candidate_dict["career_history"] = [_make_role("Acme", "Engineer")]
+
         candidate = CandidateFactory.create(base_candidate_dict)
         evidence = EvidenceVerifier().verify(candidate)
 
-        assert evidence["python"]["skills"] is True
-        # No text evidence provided, so other sources should be False.
-        assert evidence["python"]["experience"] is False
-        assert evidence["python"]["summary"] is False
+        assert evidence["acme"]["career_history"] is False
 
     def test_skill_names_are_normalized_lowercased(self, base_candidate_dict) -> None:
         base_candidate_dict["skills"] = [_make_skill("  PyThOn  ")]
@@ -166,12 +170,31 @@ class TestVerifierTextSources:
         evidence = EvidenceVerifier().verify(candidate)
         assert evidence["spark"]["experience"] is True
 
-    def test_skill_in_career_history_company(self, base_candidate_dict) -> None:
+    def test_skill_in_career_history_company_not_matched(self, base_candidate_dict) -> None:
+        """The verifier trusts the Skills Extractor, which scans role titles and
+        descriptions — NOT company names. A skill whose name equals the company
+        must therefore report ``career_history: False`` and be supported only by
+        the explicit ``skills`` source.
+        """
         base_candidate_dict["skills"] = [_make_skill("Acme")]
         base_candidate_dict["career_history"] = [_make_role("Acme", "Engineer")]
         candidate = CandidateFactory.create(base_candidate_dict)
         evidence = EvidenceVerifier().verify(candidate)
-        assert evidence["acme"]["career_history"] is True
+
+        assert evidence["acme"]["career_history"] is False
+        assert evidence["acme"]["skills"] is True
+        assert evidence["acme"]["source_support_count"] == 1
+
+    def test_skill_in_career_history_description_matched(self, base_candidate_dict) -> None:
+        """Conversely, a skill appearing in a role description (a field the
+        extractor does scan) drives the ``career_history`` source flag."""
+        base_candidate_dict["skills"] = [_make_skill("Python")]
+        base_candidate_dict["career_history"] = [
+            _make_role("Acme", "Engineer", description="Built services in Python and Go.")
+        ]
+        candidate = CandidateFactory.create(base_candidate_dict)
+        evidence = EvidenceVerifier().verify(candidate)
+        assert evidence["python"]["career_history"] is True
 
     def test_skill_in_summary(self, base_candidate_dict) -> None:
         base_candidate_dict["skills"] = [_make_skill("Python")]
@@ -181,14 +204,20 @@ class TestVerifierTextSources:
         evidence = EvidenceVerifier().verify(candidate)
         assert evidence["python"]["summary"] is True
 
-    def test_summary_checks_both_headline_and_summary(self, base_candidate_dict) -> None:
-        """Skill in only the headline (not summary) should still match 'summary' source."""
+    def test_headline_and_summary_are_independent_sources(self, base_candidate_dict) -> None:
+        """Under the metadata-driven contract, headline and summary are distinct
+        sources. A skill appearing only in the headline must set the dedicated
+        ``headline`` flag and leave ``summary`` False (previously the headline
+        was folded into ``summary``).
+        """
         base_candidate_dict["skills"] = [_make_skill("Rust")]
         base_candidate_dict["profile"]["headline"] = "Rust enthusiast"
         base_candidate_dict["profile"]["summary"] = "Nothing relevant here."
         candidate = CandidateFactory.create(base_candidate_dict)
         evidence = EvidenceVerifier().verify(candidate)
-        assert evidence["rust"]["summary"] is True
+
+        assert evidence["rust"]["headline"] is True
+        assert evidence["rust"]["summary"] is False
 
     def test_no_false_positive_substring(self, base_candidate_dict) -> None:
         """'sql' must NOT match inside 'mysql' (whole-word matching)."""
