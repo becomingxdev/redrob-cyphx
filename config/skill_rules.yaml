@@ -1,0 +1,19 @@
+# Skill extraction rules for the feature extraction layer.
+# Proficiency bucket definitions map raw proficiency strings
+# to standardized bucket names. Modify these to tune grouping.
+
+proficiency_buckets:
+  expert:
+    - "expert"
+    - "master"
+  advanced:
+    - "advanced"
+    - "senior"
+  intermediate:
+    - "intermediate"
+    - "mid"
+  beginner:
+    - "beginner"
+    - "junior"
+    - "novice"
+    - "entry"

@@ -1,0 +1,62 @@
+# Title extraction rules for the feature extraction layer.
+# Modify these lists to tune seniority detection, management indicators,
+# and AI/ML relevance without code changes.
+
+seniority_levels:
+  principal:
+    - "principal"
+    - "distinguished"
+    - "fellow"
+  staff:
+    - "staff"
+  lead:
+    - "lead"
+    - "tech lead"
+    - "head"
+  senior:
+    - "senior"
+    - "sr"
+    - "sr."
+  junior:
+    - "junior"
+    - "jr"
+    - "jr."
+    - "entry"
+    - "associate"
+    - "trainee"
+    - "intern"
+
+management_keywords:
+  - "manager"
+  - "director"
+  - "vp"
+  - "chief"
+  - "head"
+  - "lead"
+  - "cto"
+  - "ceo"
+  - "cpo"
+  - "cfo"
+  - "coo"
+  - "supervisor"
+  - "team lead"
+
+ai_ml_keywords:
+  - "ai"
+  - "ml"
+  - "artificial intelligence"
+  - "machine learning"
+  - "deep learning"
+  - "nlp"
+  - "natural language processing"
+  - "computer vision"
+  - "data scientist"
+  - "data science"
+  - "llm"
+  - "genai"
+  - "generative ai"
+  - "neural network"
+  - "reinforcement learning"
+  - "pytorch"
+  - "tensorflow"
+  - "transformer"
