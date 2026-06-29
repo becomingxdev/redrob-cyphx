@@ -1,0 +1,13 @@
+# Scoring weights for the REDROB composite scoring engine.
+# Only weights and multipliers live here. No logic.
+
+title: 0.25
+skills: 0.30
+experience: 0.20
+education: 0.10
+behavior: 0.05
+confidence: 0.05
+consistency: 0.05
+
+penalty_multiplier: 1.0
+honeypot_multiplier: 1.0
