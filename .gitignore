@@ -25,14 +25,11 @@ Thumbs.db
 # Logs
 *.log
 
-# Output (generated files)
-output/
+/model_output
 
 # Environment variables
 .env
 
-output/*
-!output/.gitkeep
 
 # data
 sample.json
