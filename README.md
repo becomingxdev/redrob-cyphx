@@ -127,6 +127,7 @@ Scores are modulated by a cross-profile evidence layer:
 redrob-cyphx/
 ├── main.py                        # Pipeline entrypoint
 ├── validate_submission.py         # Local submission validator
+├── Dockerfile                     # Hackathon sandbox container spec
 │
 ├── config/
 │   ├── jd_config.yaml             # JD parameters: title, YoE, skills, location, companies
@@ -212,7 +213,7 @@ pip install pyyaml
 
 ## Running the Pipeline
 
-### Full run (entire `candidates.jsonl` dataset)
+### Local Python Run
 
 ```bash
 python main.py
@@ -220,10 +221,25 @@ python main.py
 
 Output is written to `model_output/submission.csv`.
 
+### Docker Sandbox Run (Recommended)
+
+To run the pipeline in a clean, reproducible container that mimics the exact Stage 3 sandbox constraints (CPU-only, isolated network, 16GB memory):
+
+1. **Build the image**:
+```bash
+docker build -t redrob-cyphx .
+```
+
+2. **Run the container**:
+```bash
+docker run --rm --memory="16g" --network none -v "$(pwd)/model_output:/app/model_output" redrob-cyphx
+```
+This restricts the container memory and disables network access. The resulting CSV will be mapped back to your local `model_output` directory.
+
 ### Validate submission locally
 
 ```bash
-python validate_submission.py
+python validate_submission.py model_output/submission.csv
 ```
 
 Checks format, row count, rank uniqueness, score monotonicity, and candidate ID validity against the dataset.
@@ -316,12 +332,9 @@ This pipeline is designed to operate within the hackathon's sandbox limits:
 
 ## Tie-Breaking
 
-When two candidates share the same composite score, ranks are broken deterministically by:
+To comply strictly with the hackathon's validator logic (`validate_submission.py`), when two candidates share the identically rounded output score in the CSV, the tie is broken deterministically by:
 
-1. Higher **confidence** score
-2. Higher **consistency** score
-3. Higher **experience** score
-4. **Candidate ID** ascending (lexicographic)
+1. **Candidate ID** ascending (lexicographic order)
 
 ---
 
