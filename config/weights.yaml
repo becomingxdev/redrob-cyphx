@@ -1,13 +1,17 @@
 # Scoring weights for the REDROB composite scoring engine.
 # Only weights and multipliers live here. No logic.
+#
+# FIX 2: confidence and consistency removed as primary scoring components.
+# They are applied as adjustment factors inside composite.py, not as
+# weighted components. The 5 component weights now sum to exactly 1.0.
+# Experience weight raised 0.20→0.25 (freed from confidence 0.05).
+# Behavior weight raised 0.05→0.10 (freed from consistency 0.05).
 
 title: 0.25
 skills: 0.30
-experience: 0.20
+experience: 0.25
 education: 0.10
-behavior: 0.05
-confidence: 0.05
-consistency: 0.05
+behavior: 0.10
 
 penalty_multiplier: 1.0
 honeypot_multiplier: 1.0

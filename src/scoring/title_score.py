@@ -18,6 +18,20 @@ from src.scoring import ScoreResult
 # Seniority hierarchy ordered from most senior to least.
 _SENIORITY_ORDER: list[str] = ["principal", "staff", "lead", "senior", "mid", "junior"]
 
+# Domain keywords used to detect if career history confirms title domain.
+# FIX 3: Career context validation — match against common AI/ML/engineering terms.
+_CAREER_DOMAIN_KEYWORDS: frozenset[str] = frozenset([
+    # AI / ML
+    "machine learning", "ml", "deep learning", "nlp", "llm", "ai", "neural",
+    "data science", "data scientist", "computer vision", "reinforcement",
+    # Engineering
+    "software engineer", "backend", "frontend", "full stack", "fullstack",
+    "data engineer", "platform engineer", "site reliability", "sre",
+    "devops", "cloud", "distributed",
+    # Analytics
+    "analyst", "analytics", "business intelligence", "bi",
+])
+
 
 def _seniority_index(seniority: str) -> int:
     """Return ordinal position in the seniority hierarchy. Higher = more senior."""
@@ -47,6 +61,7 @@ def score_title(
     candidate: Candidate,
     title_features: dict,
     target_title: str | None = None,
+    career_features: dict | None = None,
 ) -> ScoreResult:
     """Score a candidate's title relevance.
 
@@ -56,6 +71,12 @@ def score_title(
         target_title: Optional target job title for exact/close matching.
             If ``None``, scoring is based purely on signal strength
             (seniority, AI relevance, completeness).
+        career_features: Optional output from ``CareerExtractor.extract()``.
+            When provided, a career-context validation bonus is applied:
+            if the candidate's career history confirms the domain of their
+            claimed title, up to +10 points are awarded. This differentiates
+            candidates with a genuine career track from those with a
+            self-declared title unsupported by work history. (FIX 3)
 
     Returns:
         A ``ScoreResult`` with score in [0, 100].
@@ -124,6 +145,27 @@ def score_title(
             else:
                 score -= 5.0
                 reasons.append(f"No token overlap with target '{target_title}': -5.0")
+
+    # --- Career context validation bonus (FIX 3) ---
+    # Award up to +10 if the candidate's actual career history confirms the
+    # domain of their claimed title. We use the title_progression list
+    # (past job titles) and industries from CareerExtractor output.
+    if career_features and is_ai_related:
+        # Scan past titles and industries for domain-matching keywords.
+        past_titles = career_features.get("title_progression") or []
+        industries = career_features.get("industries_worked_in") or []
+        career_text = " ".join(
+            str(t) for t in (past_titles + industries)
+        ).lower()
+        domain_hits = sum(1 for kw in _CAREER_DOMAIN_KEYWORDS if kw in career_text)
+        if domain_hits >= 3:
+            score += 10.0
+            reasons.append(f"Career history confirms AI/ML/Eng domain ({domain_hits} signals): +10.0")
+        elif domain_hits >= 1:
+            score += 5.0
+            reasons.append(f"Career history partially confirms domain ({domain_hits} signal): +5.0")
+        else:
+            reasons.append("Career history does not confirm AI/ML title domain")
 
     # Clamp to [0, 100].
     score = max(0.0, min(100.0, round(score, 2)))

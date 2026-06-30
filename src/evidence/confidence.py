@@ -38,14 +38,16 @@ DEFAULT_SOURCE_WEIGHTS: dict[str, float] = {
 # Aggregate confidence is scaled by how many features (relative to the total)
 # are corroborated by more than one independent source. These tunables shape
 # that curve and can be overridden via config.
+# FIX 5: consistency_weight set to 0.0. Consistency is already applied once
+# as a score multiplier in composite.py (_apply_consistency_bonus).
+# Gating confidence by consistency was a second influence of the same signal.
 DEFAULT_PARAMS: dict[str, float] = {
     # Floor applied when there are features but none are corroborated.
     "min_confidence": 0.0,
     # Ceiling applied when every feature is maximally corroborated.
     "max_confidence": 1.0,
-    # Multiplier on consistency score used to modulate final confidence.
-    # 0.0 means consistency is ignored; 1.0 means it fully gates confidence.
-    "consistency_weight": 0.15,
+    # FIX 5: was 0.15 — set to 0.0 to remove consistency from confidence.
+    "consistency_weight": 0.0,
 }
 
 

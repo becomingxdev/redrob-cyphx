@@ -41,31 +41,28 @@ class RankedEntry:
 
 
 def _tie_break_key(entry: FinalScore) -> tuple:
-    """Build a sort key for deterministic, descending ordering.
+    """Build a sort key for deterministic descending ordering.
 
-    The tuple is structured so that sorting in *descending* order (via
-    ``reverse=True``) rewards higher score, confidence, consistency, and
-    experience — except the candidate_id, which is tie-broken ascending.
+    FIX 7: The previous implementation used ``tuple(-ord(c) for c in id)``
+    to reverse string ordering inside a descending sort. This is **broken**
+    for IDs of different lengths because Python tuple comparison stops at
+    the shorter tuple, causing longer IDs to sort before shorter ones.
 
-    To achieve mixed-direction ordering with a single reverse sort, we
-    negate the candidate_id comparison by inverting its ordinal value.
+    Replacement: the key omits candidate_id. A two-pass stable sort is used
+    in :func:`rank_candidates` — the first pass establishes ascending ID
+    order, the second (stable) pass applies the score/confidence/consistency/
+    experience ordering, preserving ID order as the tiebreaker.
     """
     components = entry.component_scores or {}
     confidence = components.get("confidence", 0.0)
     consistency = components.get("consistency", 0.0)
     experience = components.get("experience", 0.0)
 
-    # For ascending candidate_id under a descending sort, we transform
-    # the string so that "smaller" strings sort later. We do this by
-    # mapping each character to its negated ordinal.
-    id_key = tuple(-ord(c) for c in entry.candidate_id)
-
     return (
         entry.score,
         confidence,
         consistency,
         experience,
-        id_key,
     )
 
 
@@ -87,10 +84,15 @@ def rank_candidates(finals: list[FinalScore]) -> list[RankedEntry]:
     if not finals:
         return []
 
-    # Single sort using a composite key. reverse=True rewards higher
-    # score/confidence/consistency/experience; the negated candidate_id
-    # ordinals ensure ascending ID ordering on ties.
-    ordered = sorted(finals, key=_tie_break_key, reverse=True)
+    # FIX 7: Two-pass stable sort.
+    # Pass 1 (secondary): sort ascending by candidate_id so equal-scored
+    #   candidates with lexicographically smaller IDs end up ranked first.
+    # Pass 2 (primary): stable sort descending by (score, confidence,
+    #   consistency, experience). Because Python's sort is stable, the
+    #   candidate_id order from pass 1 is preserved whenever the primary
+    #   key is tied.
+    by_id = sorted(finals, key=lambda f: f.candidate_id)
+    ordered = sorted(by_id, key=_tie_break_key, reverse=True)
 
     ranked: list[RankedEntry] = []
     for idx, final in enumerate(ordered):

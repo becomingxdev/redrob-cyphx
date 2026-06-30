@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 
@@ -147,33 +146,36 @@ def normalize_candidate(record: dict) -> dict:
     - Ensures optional list fields default to empty lists.
     - Returns a new dict; the original is not mutated.
     """
-    data = copy.deepcopy(record)
+    # PERF 3: Build a fresh dict instead of deepcopy — every key is
+    # explicitly overwritten below, so deepcopy is pure overhead.
+    # All reads come from the original `record`; writes go to `data`.
+    data: dict[str, Any] = {}
 
-    data["candidate_id"] = _strip_str(data.get("candidate_id", ""))
-    data["profile"] = _normalize_profile(data.get("profile") or {})
+    data["candidate_id"] = _strip_str(record.get("candidate_id", ""))
+    data["profile"] = _normalize_profile(record.get("profile") or {})
 
     # career_history — list of dicts
-    raw_career = data.get("career_history") or []
+    raw_career = record.get("career_history") or []
     data["career_history"] = [_normalize_career(item) for item in raw_career]
 
     # education — list of dicts
-    raw_edu = data.get("education") or []
+    raw_edu = record.get("education") or []
     data["education"] = [_normalize_education(item) for item in raw_edu]
 
     # skills — list of dicts, deduplicated by name
-    raw_skills = data.get("skills") or []
+    raw_skills = record.get("skills") or []
     normalized_skills = [_normalize_skill(item) for item in raw_skills]
     data["skills"] = _deduplicate_skills(normalized_skills)
 
     # certifications — optional list of dicts
-    raw_certs = data.get("certifications") or []
+    raw_certs = record.get("certifications") or []
     data["certifications"] = [_normalize_certification(item) for item in raw_certs]
 
     # languages — optional list of dicts
-    raw_langs = data.get("languages") or []
+    raw_langs = record.get("languages") or []
     data["languages"] = [_normalize_language(item) for item in raw_langs]
 
     # redrob_signals
-    data["redrob_signals"] = _normalize_redrob_signals(data.get("redrob_signals") or {})
+    data["redrob_signals"] = _normalize_redrob_signals(record.get("redrob_signals") or {})
 
     return data

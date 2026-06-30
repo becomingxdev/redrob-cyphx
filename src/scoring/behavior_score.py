@@ -5,6 +5,12 @@ contributions, mentoring, speaking, leadership, and platform engagement.
 
 This module is purely responsible for behavior scoring. It never computes
 rankings or accesses other scoring components.
+
+FIX 6: Removed the 30-point hard cap and recalibrated sub-scores so the
+engine can reach its full 0-100 scale. An exceptional candidate can now
+score ~80 points (strong GitHub + leadership + large network + many
+endorsements + full verification). The weight bump (0.05→0.10) combined
+with the corrected scale means behavior now contributes meaningfully.
 """
 
 from __future__ import annotations
@@ -81,15 +87,17 @@ def _extract_behavior_signals(candidate: Candidate) -> dict:
 def score_behavior(candidate: Candidate) -> ScoreResult:
     """Score a candidate's professional behavior signals.
 
-    Behavior is a small contribution to the overall score. It rewards
-    engagement, community involvement, and platform activity.
+    Behavior rewards engagement, community involvement, and platform activity.
+
+    FIX 6: Sub-scores recalibrated and the 30-point hard cap removed so the
+    engine operates on the full 0-100 scale consistent with other engines.
+    Natural maximum for an exceptional candidate is ~80 points.
 
     Args:
         candidate: The candidate to score.
 
     Returns:
-        A ``ScoreResult`` with score in [0, 100]. Naturally capped at a
-        modest range since behavior is a minor factor.
+        A ``ScoreResult`` with score in [0, 100].
     """
     reasons: list[str] = []
     score = 0.0
@@ -97,25 +105,28 @@ def score_behavior(candidate: Candidate) -> ScoreResult:
     signals = _extract_behavior_signals(candidate)
 
     # --- GitHub activity (open source signal) ---
+    # FIX 6: was min(github * 1.5, 15.0) → now min(github * 2.5, 25.0)
     github = signals["github_activity"]
     if github > 0:
-        github_score = min(github * 1.5, 15.0)
+        github_score = min(github * 2.5, 25.0)
         score += github_score
         reasons.append(f"GitHub activity score {github:.1f}: +{github_score:.1f}")
     else:
         reasons.append("No GitHub activity signal")
 
     # --- Leadership / community keywords ---
+    # FIX 6: was +10 → now +15
     if signals["has_leadership_keywords"]:
-        score += 10.0
-        reasons.append("Leadership/community keywords found: +10.0")
+        score += 15.0
+        reasons.append("Leadership/community keywords found: +15.0")
     else:
         reasons.append("No leadership/community keywords found")
 
     # --- Network engagement (connections) ---
+    # FIX 6: was min((c-100)*0.02, 10.0) → min((c-100)*0.03, 15.0)
     connections = signals["connection_count"]
     if connections > 100:
-        network_score = min((connections - 100) * 0.02, 10.0)
+        network_score = min((connections - 100) * 0.03, 15.0)
         score += network_score
         reasons.append(f"Strong network ({connections} connections): +{network_score:.1f}")
     elif connections > 0:
@@ -124,33 +135,37 @@ def score_behavior(candidate: Candidate) -> ScoreResult:
         reasons.append("No connections recorded")
 
     # --- Endorsements ---
+    # FIX 6: was min((e-10)*0.1, 10.0) → min((e-10)*0.15, 15.0)
     endorsements = signals["endorsements_received"]
     if endorsements > 10:
-        endorsement_score = min((endorsements - 10) * 0.1, 10.0)
+        endorsement_score = min((endorsements - 10) * 0.15, 15.0)
         score += endorsement_score
         reasons.append(f"Endorsements ({endorsements}): +{endorsement_score:.1f}")
 
     # --- Profile completeness ---
+    # FIX 6: was *0.1 → *0.15 (still low absolute contribution)
     completeness = signals["profile_completeness"]
     if completeness > 80:
-        completeness_score = (completeness - 80) * 0.1
+        completeness_score = (completeness - 80) * 0.15
         score += completeness_score
         reasons.append(f"Profile completeness {completeness:.1f}%: +{completeness_score:.1f}")
 
     # --- Verified identity ---
+    # FIX 6: was 5/2 → now 7/3
     verified = signals["verified_count"]
     if verified >= 3:
-        score += 5.0
-        reasons.append(f"Fully verified identity ({verified}/3): +5.0")
+        score += 7.0
+        reasons.append(f"Fully verified identity ({verified}/3): +7.0")
     elif verified >= 1:
-        score += 2.0
-        reasons.append(f"Partially verified identity ({verified}/3): +2.0")
+        score += 3.0
+        reasons.append(f"Partially verified identity ({verified}/3): +3.0")
     else:
         reasons.append("No verified identity signals")
 
-    # --- Natural cap: behavior is a small factor ---
-    score = min(score, 30.0)
-    score = max(0.0, round(score, 2))
+    # FIX 6: Hard cap removed. Natural maximum is ~80 for an exceptional
+    # candidate (GitHub 10→25 + leadership 15 + network 15 + endorsements 15
+    # + completeness ~3 + verified 7 = 80).
+    score = max(0.0, min(100.0, round(score, 2)))
 
     metadata = {
         "github_activity": github,

@@ -99,6 +99,11 @@ def _check_weak_evidence(evidence_result: dict) -> tuple[float, str]:
 def _check_inconsistent_profile(consistency_result: dict) -> tuple[float, str]:
     """Detect profile inconsistency based on consistency analysis.
 
+    FIX 5: Max penalty reduced from 10 → 5 points. Consistency is now the
+    primary signal via the composite engine's _apply_consistency_bonus
+    multiplier. This function handles only severely inconsistent profiles
+    (< 0.5 score) to avoid triple-counting.
+
     Returns:
         Tuple of (penalty amount, reason string).
     """
@@ -106,15 +111,12 @@ def _check_inconsistent_profile(consistency_result: dict) -> tuple[float, str]:
     conflicts = consistency_result.get("conflicts", [])
 
     if consistency_score < 0.5:
-        penalty = min((0.5 - consistency_score) * 20.0, 10.0)
+        # FIX 5: cap reduced from 10 to 5
+        penalty = min((0.5 - consistency_score) * 10.0, 5.0)
         return penalty, (
             f"Low consistency score ({consistency_score:.2f}): "
             f"{len(conflicts)} conflict(s)"
         )
-
-    if len(conflicts) >= 3:
-        penalty = 5.0
-        return penalty, f"Multiple consistency conflicts ({len(conflicts)})"
 
     return 0.0, ""
 
@@ -190,8 +192,10 @@ def apply_penalties(
     breakdown: dict[str, float] = {}
 
     # Run each penalty check.
+    # FIX 4: job_hopping removed — it is already penalized inside
+    # score_experience (up to -10 pts via hopping_index deduction).
+    # FIX 5: inconsistent_profile penalty reduced; see _check_inconsistent_profile.
     checks = [
-        ("job_hopping", _check_job_hopping(career_features)),
         ("inflated_title", _check_inflated_title(title_features, career_features, experience_features)),
         ("weak_evidence", _check_weak_evidence(evidence_result)),
         ("inconsistent_profile", _check_inconsistent_profile(consistency_result)),

@@ -136,6 +136,37 @@ def score_skills(
         score += synergy_bonus
         reasons.extend(synergy_reasons)
 
+    # --- Career-backing quality bonus (FIX 3b) ---
+    # Skills found in career_history descriptions carry stronger evidence than
+    # skills that appear only in the self-reported skills list. We use the
+    # multi_source_skills data (already computed by SkillsExtractor) to
+    # calculate what fraction of skills are career-backed and award a bonus.
+    multi_source = skill_features.get("multi_source_skills") or []
+    if multi_source:
+        career_backed = sum(
+            1 for s in multi_source
+            if "career_history" in (s.get("sources") or [])
+        )
+        career_ratio = career_backed / len(multi_source)
+        if career_ratio >= 0.5:
+            context_bonus = round(career_ratio * 15.0, 2)
+            score += context_bonus
+            reasons.append(
+                f"Career-backed skills ({career_backed}/{len(multi_source)}, "
+                f"{career_ratio:.0%}): +{context_bonus:.1f}"
+            )
+        elif career_ratio > 0:
+            context_bonus = round(career_ratio * 8.0, 2)
+            score += context_bonus
+            reasons.append(
+                f"Partially career-backed skills ({career_backed}/{len(multi_source)}): "
+                f"+{context_bonus:.1f}"
+            )
+        else:
+            reasons.append("Skills not backed by career history (self-reported only)")
+    else:
+        career_ratio = 0.0
+
     # Clamp to [0, 100].
     score = max(0.0, min(100.0, round(score, 2)))
 
@@ -145,6 +176,7 @@ def score_skills(
         "preferred_count": len(matched_preferred),
         "synergy": round(synergy_bonus, 2),
         "unique_skills": unique_count,
+        "career_backed_ratio": round(career_ratio if multi_source else 0.0, 2),
     }
 
     return ScoreResult(score=score, reasons=reasons, metadata=metadata)

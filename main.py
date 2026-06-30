@@ -50,6 +50,21 @@ DEBUG: bool = False
 HEARTBEAT_EVERY_N = 100       # print a progress line at least every N candidates
 HEARTBEAT_EVERY_SECS = 5.0    # ...or at least every N seconds, whichever first
 
+# ---------------------------------------------------------------------------
+# PERF 1: Module-level singletons — instantiated ONCE per process, not once
+# per candidate. Previously each call to _score_one_candidate re-loaded all
+# YAML config files and re-compiled all regex patterns (500k+ disk reads for
+# 100k candidates). These are now shared, stateless objects.
+# ---------------------------------------------------------------------------
+_TITLE_EXTRACTOR = TitleExtractor()
+_SKILLS_EXTRACTOR = SkillsExtractor()
+_EXPERIENCE_EXTRACTOR = ExperienceExtractor()
+_EDUCATION_EXTRACTOR = EducationExtractor()
+_CAREER_EXTRACTOR = CareerExtractor()
+_EVIDENCE_VERIFIER = EvidenceVerifier()
+_CONSISTENCY_ANALYZER = ConsistencyAnalyzer()
+_CONFIDENCE_CALC = ConfidenceCalculator()
+
 
 def _format_elapsed(seconds: float) -> str:
     """Render a duration like '1m 23.4s' or '8.2s' for log output."""
@@ -83,37 +98,42 @@ def _score_one_candidate(candidate) -> tuple:
     """Run the full per-candidate pipeline and return the composite score
     plus per-engine results needed for reason generation.
 
+    Uses module-level singleton extractors/calculators (PERF 1) so no
+    YAML loading or regex compilation happens at runtime per candidate.
+
     Returns:
         (FinalScore, component_results: dict[str, ScoreResult])
     """
-    # Feature Extraction
-    feature_extractors = {
-        "title": TitleExtractor(),
-        "skills": SkillsExtractor(),
-        "experience": ExperienceExtractor(),
-        "education": EducationExtractor(),
-        "career": CareerExtractor(),
-    }
+    # Feature Extraction — uses pre-built singletons (PERF 1)
     extracted = {
-        name: ext.extract(candidate)
-        for name, ext in feature_extractors.items()
+        "title":      _TITLE_EXTRACTOR.extract(candidate),
+        "skills":     _SKILLS_EXTRACTOR.extract(candidate),
+        "experience": _EXPERIENCE_EXTRACTOR.extract(candidate),
+        "education":  _EDUCATION_EXTRACTOR.extract(candidate),
+        "career":     _CAREER_EXTRACTOR.extract(candidate),
     }
 
-    # Evidence Layer
-    verifier = EvidenceVerifier()
-    consistency_analyzer = ConsistencyAnalyzer()
-    confidence_calc = ConfidenceCalculator()
-
-    evidence_result = verifier.verify(candidate)
-    consistency_result = consistency_analyzer.analyze(candidate)
-    confidence_result = confidence_calc.calculate(
+    # Evidence Layer — singletons reused (PERF 1).
+    # PERF 2: Pass already-extracted multi_source_skills to the verifier so
+    # it does not re-run SkillsExtractor internally.
+    evidence_result = _EVIDENCE_VERIFIER.verify(
+        candidate,
+        multi_source_skills=extracted["skills"].get("multi_source_skills"),
+    )
+    consistency_result = _CONSISTENCY_ANALYZER.analyze(candidate)
+    confidence_result = _CONFIDENCE_CALC.calculate(
         candidate=candidate,
         evidence=evidence_result,
         consistency=consistency_result,
     )
 
     # Individual Scores
-    title_score = score_title(candidate, extracted["title"])
+    # FIX 3: Pass career_features to score_title for domain validation bonus.
+    title_score = score_title(
+        candidate,
+        extracted["title"],
+        career_features=extracted["career"],
+    )
     skill_score = score_skills(candidate, extracted["skills"])
     exp_score = score_experience(
         candidate, extracted["experience"], extracted["career"],

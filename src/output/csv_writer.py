@@ -16,14 +16,12 @@ from src.output.ranking import RankedEntry
 from src.reasoning.generator import Reason
 
 
-# Submission column header (order matters).
+# FIX 1: Submission column header must match the official validator exactly.
 _HEADER: list[str] = [
     "candidate_id",
     "rank",
-    "final_score",
-    "confidence",
-    "consistency",
-    "reason",
+    "score",
+    "reasoning",
 ]
 
 
@@ -68,15 +66,13 @@ def write_submission_csv(
 
         for entry in ranked:
             reason = reasons.get(entry.candidate_id)
-            reason_text = _format_reason(reason.reasons) if reason else ""
+            reasoning_text = _format_reason(reason.reasons) if reason else ""
 
             writer.writerow([
                 entry.candidate_id,
                 entry.rank,
                 f"{entry.final_score:.2f}",
-                f"{entry.confidence:.2f}",
-                f"{entry.consistency:.2f}",
-                reason_text,
+                reasoning_text,
             ])
 
     return destination

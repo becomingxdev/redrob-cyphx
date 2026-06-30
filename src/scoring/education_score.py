@@ -17,20 +17,32 @@ from src.scoring import ScoreResult
 
 # Degree hierarchy scores. These are used only to assign relative points,
 # not to determine the "highest" degree (that is the extractor's job).
+_RELEVANCE_SCORES: dict[str, float] = {
+    # FIX 6b: raised to give field relevance a more meaningful contribution.
+    # Previous values: direct=10, partial=7, low=3
+    "direct": 15.0,
+    "partial": 10.0,
+    "low": 5.0,
+}
+
 _DEGREE_SCORES: dict[str, float] = {
-    "phd": 25.0,
-    "masters": 20.0,
-    "bachelors": 15.0,
-    "diploma": 8.0,
-    "school": 3.0,
+    # FIX 6b: raised to give degrees a more meaningful contribution on the 0-100 scale.
+    # Previous values: phd=25, masters=20, bachelors=15, diploma=8, school=3
+    "phd": 40.0,
+    "masters": 30.0,
+    "bachelors": 20.0,
+    "diploma": 10.0,
+    "school": 5.0,
 }
 
 # Institution tier scores (rule-based).
 _TIER_SCORES: dict[str, float] = {
-    "tier_1": 15.0,
-    "tier_2": 10.0,
-    "tier_3": 5.0,
-    "tier_4": 2.0,
+    # FIX 6b: raised to give institution tier a more meaningful contribution.
+    # Previous values: tier_1=15, tier_2=10, tier_3=5, tier_4=2
+    "tier_1": 20.0,
+    "tier_2": 14.0,
+    "tier_3": 8.0,
+    "tier_4": 3.0,
 }
 
 # Field relevance keywords for common tech/data roles.
@@ -156,9 +168,10 @@ def score_education(
         score += multi_bonus
         reasons.append(f"Multiple degrees ({education_count}): +{multi_bonus:.1f}")
 
-    # --- Natural cap: education should never dominate ---
-    score = min(score, 50.0)
-    score = max(0.0, round(score, 2))
+    # FIX 6b: Hard cap (was 50.0) removed. Score is now bounded by the
+    # natural sub-score sums: degree(40) + tier(20) + relevance(15) +
+    # multi-degree bonus(6) ≈ 81 max for an exceptional academic profile.
+    score = max(0.0, min(100.0, round(score, 2)))
 
     metadata = {
         "degree": highest_degree,

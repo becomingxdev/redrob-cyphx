@@ -77,14 +77,19 @@ class FinalScore:
 
 
 # Default weight values (mirrors config/weights.yaml).
+# FIX 2: confidence and consistency removed as primary scoring components;
+# they remain as adjustment factors in composite.py (see _apply_confidence_adjustment
+# and _apply_consistency_bonus). The 5 component weights sum to exactly 1.0.
+# penalty_multiplier and honeypot_multiplier are included so load_weights()
+# can read them from YAML.
 DEFAULT_WEIGHTS: dict[str, float] = {
     "title": 0.25,
     "skills": 0.30,
-    "experience": 0.20,
+    "experience": 0.25,
     "education": 0.10,
-    "behavior": 0.05,
-    "confidence": 0.05,
-    "consistency": 0.05,
+    "behavior": 0.10,
+    "penalty_multiplier": 1.0,
+    "honeypot_multiplier": 1.0,
 }
 
 DEFAULT_PENALTY_MULTIPLIER: float = 1.0
