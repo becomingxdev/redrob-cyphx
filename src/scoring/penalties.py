@@ -204,6 +204,11 @@ def _check_domain_mismatch(skill_features: dict) -> tuple[float, str]:
 
     JD disqualifier: 'Primary expertise is CV/speech/robotics without NLP/retrieval'.
 
+    Fallback #19 fix: Tiered anchor mitigation. A candidate who only lists
+    generic ML skills ('machine learning', 'python') but has a CV-heavy profile
+    is still a domain mismatch for this retrieval-focused JD. Only domain-specific
+    anchors (retrieval, vector db, embeddings, rag, etc.) fully clear the penalty.
+
     Returns:
         Tuple of (penalty amount, reason string).
     """
@@ -224,33 +229,50 @@ def _check_domain_mismatch(skill_features: dict) -> tuple[float, str]:
         (candidate_skills & robotics_keywords)
     )
 
-    # NLP/retrieval presence mitigates penalty
-    nlp_anchors = {"nlp", "embeddings", "retrieval", "information retrieval",
-                   "vector db", "semantic search", "transformers", "llm", "machine learning",
-                   "rag", "ranking"}
-    has_nlp_anchor = bool(candidate_skills & nlp_anchors)
+    # --- Tier 1: strong domain-specific anchors → full mitigation ---
+    # Only retrieval/NLP-specific terms prove real domain overlap.
+    strong_anchors = {
+        "nlp", "embeddings", "retrieval", "information retrieval",
+        "vector db", "vector database", "semantic search", "transformers",
+        "llm", "rag", "retrieval augmented generation", "ranking",
+        "dense retrieval", "sparse retrieval", "learning to rank",
+    }
+    has_strong_anchor = bool(candidate_skills & strong_anchors)
+    if has_strong_anchor:
+        return 0.0, ""  # Genuinely bridges domains — no penalty
 
-    if has_nlp_anchor:
-        return 0.0, ""  # Bridges domains — no penalty
+    # --- Tier 2: weak generic anchors → partial mitigation (60% off) ---
+    weak_anchors = {
+        "machine learning", "ml", "deep learning", "python",
+        "pytorch", "tensorflow", "data science", "artificial intelligence", "ai",
+    }
+    has_weak_anchor = bool(candidate_skills & weak_anchors)
+    weak_reduction = 0.6 if has_weak_anchor else 0.0
 
     mismatch_threshold = JD.get("domain_mismatch_fraction", 0.5)
     total_skills = len(candidate_skills)
     anti_fraction = anti_hits / total_skills if total_skills > 0 else 0.0
 
     if anti_fraction >= mismatch_threshold:
-        penalty = 15.0
+        base_penalty = 15.0
+        penalty = base_penalty * (1.0 - weak_reduction)
+        anchor_note = f", partial mitigation (generic ML anchor, -{weak_reduction:.0%})" if has_weak_anchor else ""
         return penalty, (
             f"Primary domain is CV/speech/robotics ({anti_hits} anti-skills, "
-            f"{anti_fraction:.0%} of profile) without NLP/retrieval anchor: -{penalty:.0f}"
+            f"{anti_fraction:.0%} of profile) without NLP/retrieval anchor"
+            f"{anchor_note}: -{penalty:.0f}"
         )
     elif anti_fraction >= 0.3 or anti_hits >= 3:
-        penalty = 8.0
+        base_penalty = 8.0
+        penalty = base_penalty * (1.0 - weak_reduction)
+        anchor_note = f", partial mitigation (generic ML anchor, -{weak_reduction:.0%})" if has_weak_anchor else ""
         return penalty, (
             f"Significant CV/speech/robotics focus without NLP presence "
-            f"({anti_hits} anti-skills): -{penalty:.0f}"
+            f"({anti_hits} anti-skills{anchor_note}): -{penalty:.0f}"
         )
 
     return 0.0, ""
+
 
 
 def _check_management_no_code(

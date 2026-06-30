@@ -64,7 +64,7 @@ def write_submission_csv(
         writer = csv.writer(fh)
         writer.writerow(_HEADER)
 
-        for entry in ranked:
+        for entry in ranked[:100]:
             reason = reasons.get(entry.candidate_id)
             reasoning_text = _format_reason(reason.reasons) if reason else ""
 

@@ -58,13 +58,32 @@ _ROBOTICS_SKILLS: frozenset[str] = frozenset([
     "motion planning", "kinematics",
 ])
 
-# NLP/retrieval anchor skills — if any of these are present, anti-skills
-# don't trigger (the candidate bridges domains)
-_NLP_ANCHOR_SKILLS: frozenset[str] = frozenset([
-    "nlp", "natural language processing", "embeddings", "vector db",
-    "retrieval", "information retrieval", "semantic search", "transformers",
-    "llm", "rag", "machine learning", "ml", "ranking",
+# NLP/retrieval anchor skills — split into two tiers (Fallback #19 fix).
+#
+# STRONG anchors: domain-specific — fully mitigate anti-skill penalty.
+# Only these prove the candidate genuinely bridges into NLP/retrieval.
+_STRONG_NLP_ANCHORS: frozenset[str] = frozenset([
+    "nlp", "natural language processing",
+    "embeddings", "vector db", "vector database",
+    "retrieval", "information retrieval", "dense retrieval", "sparse retrieval",
+    "semantic search", "rag", "retrieval augmented generation",
+    "ranking", "learning to rank",
+    "transformers",
+    "llm",
 ])
+
+# WEAK anchors: generic ML terms that any ML engineer might list.
+# Their presence only *reduces* the anti-skill penalty (60% off), never eliminates it.
+# A pure computer vision PhD who also lists "python" and "machine learning"
+# is still a domain mismatch for this JD.
+_WEAK_NLP_ANCHORS: frozenset[str] = frozenset([
+    "machine learning", "ml", "deep learning",
+    "python", "pytorch", "tensorflow", "scikit-learn",
+    "data science", "artificial intelligence", "ai",
+])
+
+# Combined for backwards-compat references (not used in _check_anti_skills).
+_NLP_ANCHOR_SKILLS: frozenset[str] = _STRONG_NLP_ANCHORS | _WEAK_NLP_ANCHORS
 
 # Proficiency tiers — used to weight required-skill credit
 _PROFICIENCY_WEIGHTS: dict[str, float] = {
@@ -114,13 +133,21 @@ def _check_anti_skills(
 ) -> tuple[float, str]:
     """Detect domain mismatch — CV/speech/robotics without NLP/retrieval presence.
 
+    Fallback #19 fix: Tiered anchor mitigation.
+      - STRONG anchors (retrieval, embeddings, vector db, rag, etc.):
+        fully mitigate the penalty — candidate genuinely bridges domains.
+      - WEAK anchors (machine learning, ml, python, etc.):
+        reduce the penalty by 60% but do not eliminate it — a pure CV
+        specialist who lists 'machine learning' is still a domain mismatch.
+      - No anchors: full penalty applies.
+
     Returns:
         Tuple of (penalty points, reason string).
     """
-    # Check if candidate has any NLP/retrieval anchor skill
-    has_nlp_anchor = bool(candidate_skills & _NLP_ANCHOR_SKILLS)
-    if has_nlp_anchor:
-        return 0.0, ""  # No penalty — candidate bridges domains
+    # --- Tier 1: strong domain-specific anchors → full mitigation ---
+    has_strong_anchor = bool(candidate_skills & _STRONG_NLP_ANCHORS)
+    if has_strong_anchor:
+        return 0.0, ""  # Candidate genuinely bridges into NLP/retrieval
 
     # Count anti-skill hits
     cv_hits = candidate_skills & _CV_SKILLS
@@ -135,17 +162,26 @@ def _check_anti_skills(
     total_skills = len(candidate_skills) if candidate_skills else 1
     anti_fraction = total_anti / total_skills
 
+    # --- Tier 2: weak generic anchors → partial mitigation (60% off) ---
+    has_weak_anchor = bool(candidate_skills & _WEAK_NLP_ANCHORS)
+    weak_reduction = 0.6 if has_weak_anchor else 0.0  # fraction to reduce penalty by
+
     if anti_fraction >= 0.4:
-        penalty = 20.0
+        base_penalty = 20.0
+        penalty = base_penalty * (1.0 - weak_reduction)
+        anchor_note = f", partial mitigation (weak anchor, -{weak_reduction:.0%})" if has_weak_anchor else ""
         return penalty, (
             f"Primary expertise is CV/speech/robotics without NLP/retrieval anchor "
-            f"({total_anti} anti-skills, {anti_fraction:.0%} of profile): -{penalty:.0f}"
+            f"({total_anti} anti-skills, {anti_fraction:.0%} of profile"
+            f"{anchor_note}): -{penalty:.0f}"
         )
     elif anti_fraction >= 0.2 or total_anti >= 3:
-        penalty = 10.0
+        base_penalty = 10.0
+        penalty = base_penalty * (1.0 - weak_reduction)
+        anchor_note = f", partial mitigation (weak anchor, -{weak_reduction:.0%})" if has_weak_anchor else ""
         return penalty, (
             f"Significant CV/speech/robotics focus without NLP anchor "
-            f"({total_anti} anti-skills): -{penalty:.0f}"
+            f"({total_anti} anti-skills{anchor_note}): -{penalty:.0f}"
         )
 
     return 0.0, ""

@@ -25,7 +25,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from src.models.candidate import Candidate
 from src.scoring import ScoreResult
-from src.jd_config import JD_REQUIRED_SKILLS
+from src.jd_config import JD_REQUIRED_SKILLS, JD_TOP_TIER
 
 
 # Leadership/community keywords (kept for community engagement bonus)
@@ -152,6 +152,23 @@ def _extract_behavior_signals(candidate: Candidate) -> dict:
         signals["has_leadership_keywords"] = any(
             kw in text_blob for kw in _LEADERSHIP_KEYWORDS
         )
+
+    # Extract current company from career_history (most recent role by start_date)
+    # Used for the zero-notice paradox check (Fallback #20).
+    current_company: str = ""
+    if candidate.career_history:
+        # Sort descending by start_date; take the first role with a company name
+        sorted_roles = sorted(
+            candidate.career_history,
+            key=lambda r: (r.start_date or ""),
+            reverse=True,
+        )
+        for role in sorted_roles:
+            company = (getattr(role, "company", "") or "").strip().lower()
+            if company:
+                current_company = company
+                break
+    signals["current_company"] = current_company
 
     return signals
 
@@ -382,6 +399,33 @@ def score_behavior(candidate: Candidate) -> ScoreResult:
         reasons.append(f"Partially verified identity ({verified}/3): +3.0")
     else:
         reasons.append("No verified identity signals")
+
+    # ================================================================
+    # PART 6 (LOW-PRIORITY): ZERO-NOTICE TOP-TIER PARADOX (Fallback #20)
+    # ================================================================
+    # A candidate claiming to be currently employed at a top-tier firm
+    # (e.g. Google, OpenAI, Stripe) with 0 days notice AND submitting
+    # 10+ applications/month is a mild credibility mismatch:
+    #   - Tier-1 firms enforce standard notice periods (30-90 days).
+    #   - Immediate availability from such companies suggests:
+    #       a) recent layoff (profile not updated), OR
+    #       b) fabricated current employer.
+    # Penalty is deliberately mild (-5) — not a hard filter.
+    current_company = signals.get("current_company", "")
+    apps = signals["applications_submitted_30d"]
+    if (
+        current_company
+        and notice is not None
+        and notice == 0
+        and apps >= 10
+        and any(tier in current_company for tier in JD_TOP_TIER)
+    ):
+        penalties += 5.0
+        reasons.append(
+            f"Zero-notice paradox: claims '{current_company}' employment "
+            f"with 0-day notice + {apps} applications/30d "
+            f"(credibility signal): -5.0"
+        )
 
     # ================================================================
     # Apply penalties and clamp

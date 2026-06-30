@@ -355,6 +355,114 @@ def _check_excessive_skill_count(candidate: Candidate) -> tuple[float, str]:
     return 0.0, ""
 
 
+def _check_skill_duration_vs_career_timeline(
+    candidate: Candidate,
+    experience_features: dict,
+) -> tuple[float, str]:
+    """Detect skills whose claimed duration exceeds the candidate's total career span.
+
+    Fallback #18 fix: Candidates who claim 10 years of Python experience but
+    only have 4 years of career history are the exact 'subtly impossible profile'
+    the hackathon warns about. The existing expert+zero-duration check catches
+    0-value fraud; this check catches inflated non-zero durations.
+
+    Logic:
+        1. Compute total_career_months = months from earliest role start_date
+           to today (using experience_features fallback if available).
+        2. For each skill with a declared duration_months > 0, check if it
+           exceeds total_career_months + GRACE_MONTHS.
+        3. Suspicion scales with:
+           - Number of violating skills (breadth of fraud)
+           - Size of the worst individual excess (severity)
+
+    Tolerances:
+        GRACE_MONTHS = 12   Allow up to 12 months over career span
+                            (accounts for side projects / pre-career coding)
+        MAX_SUSPICION = 25  Capped so it can combine with other checks.
+
+    Returns:
+        Tuple of (suspicion points, reason string).
+    """
+    if not candidate.skills:
+        return 0.0, ""
+
+    GRACE_MONTHS: int = 12
+    MAX_SUSPICION: float = 25.0
+    CURRENT_YEAR: int = 2026
+
+    # --- Step 1: Compute total career span in months ---
+    # Prefer pre-computed total from ExperienceExtractor; fall back to
+    # scanning career_history directly so this check is self-contained.
+    total_career_months: float | None = None
+
+    # ExperienceExtractor stores total_months_worked
+    extracted_months = experience_features.get("total_months_worked")
+    if extracted_months and extracted_months > 0:
+        total_career_months = float(extracted_months)
+    else:
+        # Derive from earliest career start_date
+        earliest_start: tuple[int, int] | None = None  # (year, month)
+        if candidate.career_history:
+            for role in candidate.career_history:
+                if not role.start_date:
+                    continue
+                try:
+                    parts = role.start_date.strip()[:7].split("-")
+                    yr = int(parts[0])
+                    mo = int(parts[1]) if len(parts) > 1 else 1
+                    if earliest_start is None or (yr, mo) < earliest_start:
+                        earliest_start = (yr, mo)
+                except (ValueError, IndexError):
+                    continue
+
+        if earliest_start:
+            start_yr, start_mo = earliest_start
+            # Months from start to mid-2026
+            total_career_months = (CURRENT_YEAR - start_yr) * 12 + (6 - start_mo)
+            total_career_months = max(1.0, total_career_months)
+
+    if total_career_months is None or total_career_months <= 0:
+        # Can't compute career span — skip check rather than false-positive
+        return 0.0, ""
+
+    allowed_months = total_career_months + GRACE_MONTHS
+
+    # --- Step 2: Find violating skills ---
+    violations: list[tuple[str, int, float]] = []  # (skill_name, claimed, excess)
+    for skill in candidate.skills:
+        skill_name = (getattr(skill, "name", "") or "").strip()
+        duration = getattr(skill, "duration_months", None)
+        if duration is None or duration <= 0:
+            continue  # zero/None handled by expert_zero_duration check
+        excess = duration - allowed_months
+        if excess > 0:
+            violations.append((skill_name, int(duration), excess))
+
+    if not violations:
+        return 0.0, ""
+
+    # --- Step 3: Score based on breadth and worst excess ---
+    n_violations = len(violations)
+    worst_excess = max(v[2] for v in violations)  # months
+    worst_skill, worst_claimed, _ = max(violations, key=lambda v: v[2])
+
+    # Breadth component: 5 pts per violating skill, capped at 15
+    breadth_pts = min(n_violations * 5.0, 15.0)
+    # Severity component: 1 pt per 6 months of excess, capped at 10
+    severity_pts = min(worst_excess / 6.0, 10.0)
+    suspicion = min(breadth_pts + severity_pts, MAX_SUSPICION)
+
+    career_years = total_career_months / 12.0
+    claimed_years = worst_claimed / 12.0
+
+    reason = (
+        f"{n_violations} skill(s) claim duration exceeding career span "
+        f"({career_years:.1f} yr career, worst: '{worst_skill}' claims "
+        f"{claimed_years:.1f} yr): +{suspicion:.0f} suspicion"
+    )
+    return suspicion, reason
+
+
 def detect_honeypot(
     candidate: Candidate,
     experience_features: dict,
@@ -367,6 +475,10 @@ def detect_honeypot(
 
     Fallback #7 fix: Added new checks for keyword-stuffed titles, expert
     claims with 0 duration, impossible age, and excessive skill counts.
+
+    Fallback #18 fix: Added skill-duration vs career-timeline check that
+    catches candidates claiming more skill experience than their total
+    career span allows (e.g. 10 yr Python claim with 4 yr career).
 
     The composite engine uses HARD_FILTER_THRESHOLD: if suspicion_score
     exceeds this, the final composite score is capped at 20.
@@ -395,12 +507,15 @@ def detect_honeypot(
         ("fake_expertise", _check_fake_expertise(candidate, evidence_result)),
         ("suspicious_claims", _check_suspicious_claims(
             candidate, consistency_result, evidence_result)),
-        # New checks (Fallback #7)
+        # Fallback #7 checks
         ("keyword_stuffed_title", _check_keyword_stuffed_title(title_features)),
         ("expert_zero_duration", _check_expert_zero_duration(candidate)),
         ("impossible_age", _check_impossible_age(
             candidate, experience_features, education_features)),
         ("excessive_skill_count", _check_excessive_skill_count(candidate)),
+        # Fallback #18 check
+        ("skill_duration_vs_career", _check_skill_duration_vs_career_timeline(
+            candidate, experience_features)),
     ]
 
     for name, (suspicion, reason) in checks:
