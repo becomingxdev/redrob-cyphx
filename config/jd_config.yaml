@@ -1,0 +1,248 @@
+# Job Description Configuration — Senior AI Engineer (Founding Team)
+# This file defines all JD-specific parameters that drive JD-aware scoring.
+# Loaded once at startup; never modified at runtime.
+
+# Target title for exact/close matching in title_score.py
+target_title: "Senior AI Engineer"
+
+# Ideal years of experience (midpoint of 5-9 year range stated in JD)
+target_yoe: 7.0
+ideal_yoe_min: 5.0
+ideal_yoe_max: 9.0
+
+# ----------------------------------------------------------------
+# Skills hierarchy
+# ----------------------------------------------------------------
+
+# Absolutely required — 40-point scoring lever in skill_score.py
+required_skills:
+  - "python"
+  - "embeddings"
+  - "vector db"
+  - "vector database"
+  - "retrieval"
+  - "ranking"
+  - "evaluation"
+  - "nlp"
+  - "machine learning"
+  - "pinecone"
+  - "weaviate"
+  - "faiss"
+  - "chroma"
+  - "qdrant"
+  - "milvus"
+  - "information retrieval"
+  - "semantic search"
+  - "ndcg"
+  - "mrr"
+  - "map"
+  - "rag"
+  - "retrieval augmented generation"
+  - "llm"
+
+# Nice-to-have — 15-point scoring lever in skill_score.py
+preferred_skills:
+  - "fine-tuning"
+  - "lora"
+  - "rlhf"
+  - "pytorch"
+  - "tensorflow"
+  - "distributed systems"
+  - "learning to rank"
+  - "elasticsearch"
+  - "solr"
+  - "hugging face"
+  - "transformers"
+  - "open source"
+  - "hr-tech"
+  - "recommendation systems"
+  - "a/b testing"
+  - "experiment design"
+  - "mlflow"
+  - "kubeflow"
+  - "feast"
+
+# Skills that are primary expertise red flags (without NLP/retrieval presence)
+# A candidate dominated by these without required_skills is a domain mismatch.
+anti_skills:
+  - "computer vision"
+  - "opencv"
+  - "object detection"
+  - "image segmentation"
+  - "speech recognition"
+  - "asr"
+  - "tts"
+  - "text to speech"
+  - "robotics"
+  - "ros"
+  - "slam"
+  - "autonomous vehicles"
+  - "langchain"  # framework enthusiast without underlying skills
+  - "llamaindex"  # framework enthusiast without underlying skills
+
+# Framework-enthusiast signals: these alone without required_skills = red flag
+framework_only_skills:
+  - "langchain"
+  - "llamaindex"
+  - "autogpt"
+  - "agentgpt"
+
+# Production/system-building keywords for career description analysis
+production_keywords:
+  - "built"
+  - "shipped"
+  - "deployed"
+  - "maintained"
+  - "production"
+  - "scaled"
+  - "serving"
+  - "real-time"
+  - "latency"
+  - "throughput"
+  - "a/b test"
+  - "launched"
+  - "integrated"
+  - "optimized"
+  - "reduced"
+  - "improved"
+
+# Research-only keywords (without production = red flag for this JD)
+research_keywords:
+  - "published"
+  - "arxiv"
+  - "paper"
+  - "proposed"
+  - "theoretical"
+  - "novel"
+  - "sota"
+  - "state of the art"
+  - "benchmark"
+  - "dataset"
+  - "annotation"
+
+# Domain relevance keywords for hidden-fit detection
+domain_relevance_keywords:
+  - "recommendation"
+  - "search"
+  - "ranking"
+  - "retrieval"
+  - "relevance"
+  - "embedding"
+  - "similarity"
+  - "personalization"
+  - "matching"
+  - "scoring"
+  - "index"
+  - "vector"
+  - "dense retrieval"
+  - "sparse retrieval"
+
+# ----------------------------------------------------------------
+# Location requirements
+# ----------------------------------------------------------------
+
+# Tier-1: preferred cities (JD explicitly mentions Pune/Noida)
+preferred_cities:
+  - "pune"
+  - "noida"
+
+# Tier-2: acceptable cities (JD says okay for hybrid)
+acceptable_cities:
+  - "hyderabad"
+  - "mumbai"
+  - "bengaluru"
+  - "bangalore"
+  - "delhi"
+  - "delhi ncr"
+  - "gurugram"
+  - "gurgaon"
+  - "chennai"
+
+# Required country (JD says no visa sponsorship)
+required_country: "india"
+
+# JD work mode requirement
+required_work_mode: "hybrid"
+
+# ----------------------------------------------------------------
+# Company quality classification
+# ----------------------------------------------------------------
+
+# IT Services firms — consulting-only career is a red flag per JD
+it_services_companies:
+  - "tcs"
+  - "tata consultancy"
+  - "infosys"
+  - "wipro"
+  - "accenture"
+  - "cognizant"
+  - "capgemini"
+  - "hcl"
+  - "hcl technologies"
+  - "tech mahindra"
+  - "mphasis"
+  - "ltimindtree"
+  - "l&t infotech"
+  - "hexaware"
+  - "niit technologies"
+  - "mastech"
+  - "syntel"
+  - "patni"
+  - "zensar"
+  - "persistent systems"
+
+# Known top-tier product/research companies — bonus
+top_tier_companies:
+  - "google"
+  - "meta"
+  - "microsoft"
+  - "amazon"
+  - "apple"
+  - "openai"
+  - "anthropic"
+  - "deepmind"
+  - "nvidia"
+  - "databricks"
+  - "stripe"
+  - "airbnb"
+  - "netflix"
+  - "uber"
+  - "linkedin"
+  - "twitter"
+  - "flipkart"
+  - "swiggy"
+  - "zomato"
+  - "paytm"
+  - "razorpay"
+  - "cred"
+  - "meesho"
+  - "dream11"
+  - "byju"
+  - "unacademy"
+  - "freshworks"
+  - "zoho"
+  - "hasura"
+  - "sarvam"
+  - "krutrim"
+
+# ----------------------------------------------------------------
+# Salary alignment (Fallback #14)
+# ----------------------------------------------------------------
+
+# Typical Series A Senior AI Engineer band in India (INR LPA)
+salary_band_min_lpa: 20
+salary_band_max_lpa: 50
+salary_extreme_threshold_lpa: 80  # > this → wildly misaligned
+
+# ----------------------------------------------------------------
+# Scoring thresholds
+# ----------------------------------------------------------------
+
+# Honeypot hard filter: suspicion_score above this → composite capped at 20
+honeypot_hard_filter_threshold: 40
+
+# Consulting-only penalty: fraction of career at IT services firms to trigger
+consulting_only_fraction: 0.8
+
+# Domain mismatch: fraction of anti_skills in top-10 skills to trigger mismatch
+domain_mismatch_fraction: 0.5

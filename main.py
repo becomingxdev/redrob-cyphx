@@ -4,6 +4,12 @@ Pipeline order:
     Load Candidates → Feature Extraction → Evidence Verification →
     Confidence → Consistency → Individual Scores → Penalty →
     Honeypot → Composite Score → Ranking → Reason Generation → CSV Export
+
+Fallback #1 fix: JD-specific parameters (target_title, required_skills,
+    preferred_skills, target_yoe) are now passed to all scoring engines.
+Fallback #2 fix: LocationExtractor instantiated and score_location() wired.
+Fallback #12 fix: Reason generation runs only for top-100 candidates.
+Fallback #13 fix: Single output path (model_output/submission.csv).
 """
 
 import time
@@ -11,8 +17,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from src.models.candidate import Candidate
 from src.parser.loader import load_candidates
 from src.utils.banner import print_banner
+
+# JD Config — loaded ONCE at module level (Fallback #1)
+from src.jd_config import JD
 
 # Feature Extractors
 from src.features.title import TitleExtractor
@@ -33,6 +43,7 @@ from src.scoring.skill_score import score_skills
 from src.scoring.experience_score import score_experience
 from src.scoring.education_score import score_education
 from src.scoring.behavior_score import score_behavior
+from src.scoring.location_score import score_location
 from src.scoring.penalties import apply_penalties
 from src.scoring.honeypot import detect_honeypot
 from src.scoring.composite import compose_score
@@ -42,24 +53,34 @@ from src.output.ranking import rank_candidates
 from src.reasoning.generator import generate_reason
 from src.output.csv_writer import write_submission_csv
 
-DATASET_PATH = "data/test.jsonl"
+DATASET_PATH = "data/candidates.jsonl"
 OUTPUT_PATH = "model_output/submission.csv"
 DEBUG: bool = False
 
 # --- Progress / timing instrumentation only — does not affect scoring ---
-HEARTBEAT_EVERY_N = 100       # print a progress line at least every N candidates
-HEARTBEAT_EVERY_SECS = 5.0    # ...or at least every N seconds, whichever first
+HEARTBEAT_EVERY_N = 100
+HEARTBEAT_EVERY_SECS = 5.0
+
+# How many top-ranked candidates get reason generation (Fallback #12)
+TOP_N_FOR_REASONS = 100
+TOP_N_BUFFER = 20  # Small buffer for safety
 
 # ---------------------------------------------------------------------------
-# PERF 1: Module-level singletons — instantiated ONCE per process, not once
-# per candidate. Previously each call to _score_one_candidate re-loaded all
-# YAML config files and re-compiled all regex patterns (500k+ disk reads for
-# 100k candidates). These are now shared, stateless objects.
+# JD Parameters — loaded from config/jd_config.yaml (Fallback #1)
+# ---------------------------------------------------------------------------
+_TARGET_TITLE: str | None = JD.get("target_title")
+_TARGET_YOE: float | None = JD.get("target_yoe")
+_REQUIRED_SKILLS: list[str] = list(JD.get("required_skills") or [])
+_PREFERRED_SKILLS: list[str] = list(JD.get("preferred_skills") or [])
+
+# ---------------------------------------------------------------------------
+# PERF 1: Module-level singletons — instantiated ONCE per process
 # ---------------------------------------------------------------------------
 _TITLE_EXTRACTOR = TitleExtractor()
 _SKILLS_EXTRACTOR = SkillsExtractor()
 _EXPERIENCE_EXTRACTOR = ExperienceExtractor()
 _EDUCATION_EXTRACTOR = EducationExtractor()
+_LOCATION_EXTRACTOR = LocationExtractor()
 _CAREER_EXTRACTOR = CareerExtractor()
 _EVIDENCE_VERIFIER = EvidenceVerifier()
 _CONSISTENCY_ANALYZER = ConsistencyAnalyzer()
@@ -80,13 +101,7 @@ def _now_str() -> str:
 
 
 def _count_lines(path: Path) -> Optional[int]:
-    """Best-effort total record count, used only to show progress/ETA.
-
-    This is a read-only scan separate from load_candidates() and has no
-    effect on the scoring pipeline. Returns None if it can't be counted
-    (e.g. unreadable file), in which case progress logging just omits the
-    total/percentage/ETA and falls back to a simple running count.
-    """
+    """Best-effort total record count, used only to show progress/ETA."""
     try:
         with path.open("r", encoding="utf-8") as f:
             return sum(1 for _ in f)
@@ -98,24 +113,24 @@ def _score_one_candidate(candidate) -> tuple:
     """Run the full per-candidate pipeline and return the composite score
     plus per-engine results needed for reason generation.
 
-    Uses module-level singleton extractors/calculators (PERF 1) so no
-    YAML loading or regex compilation happens at runtime per candidate.
+    Fallback #1: JD-specific parameters passed to all scoring engines.
+    Fallback #2: Location extracted and scored.
+    Fallback #3: skill_features passed to apply_penalties for domain checks.
 
     Returns:
         (FinalScore, component_results: dict[str, ScoreResult])
     """
-    # Feature Extraction — uses pre-built singletons (PERF 1)
+    # Feature Extraction
     extracted = {
         "title":      _TITLE_EXTRACTOR.extract(candidate),
         "skills":     _SKILLS_EXTRACTOR.extract(candidate),
         "experience": _EXPERIENCE_EXTRACTOR.extract(candidate),
         "education":  _EDUCATION_EXTRACTOR.extract(candidate),
+        "location":   _LOCATION_EXTRACTOR.extract(candidate),
         "career":     _CAREER_EXTRACTOR.extract(candidate),
     }
 
-    # Evidence Layer — singletons reused (PERF 1).
-    # PERF 2: Pass already-extracted multi_source_skills to the verifier so
-    # it does not re-run SkillsExtractor internally.
+    # Evidence Layer
     evidence_result = _EVIDENCE_VERIFIER.verify(
         candidate,
         multi_source_skills=extracted["skills"].get("multi_source_skills"),
@@ -127,22 +142,36 @@ def _score_one_candidate(candidate) -> tuple:
         consistency=consistency_result,
     )
 
-    # Individual Scores
-    # FIX 3: Pass career_features to score_title for domain validation bonus.
+    # Individual Scores — JD parameters wired in (Fallback #1)
     title_score = score_title(
         candidate,
         extracted["title"],
+        target_title=_TARGET_TITLE,       # Fallback #1 fix
         career_features=extracted["career"],
     )
-    skill_score = score_skills(candidate, extracted["skills"])
+    skill_score = score_skills(
+        candidate,
+        extracted["skills"],
+        required_skills=_REQUIRED_SKILLS,   # Fallback #1 fix
+        preferred_skills=_PREFERRED_SKILLS, # Fallback #1 fix
+    )
     exp_score = score_experience(
-        candidate, extracted["experience"], extracted["career"],
+        candidate,
+        extracted["experience"],
+        extracted["career"],
+        target_years=_TARGET_YOE,          # Fallback #1 fix
     )
     edu_score = score_education(
-        candidate, extracted["education"],
+        candidate,
+        extracted["education"],
         candidate_skills=set(extracted["skills"].get("skills", [])),
     )
     beh_score = score_behavior(candidate)
+
+    # Location score (Fallback #2)
+    loc_score = score_location(candidate, extracted["location"])
+
+    # Penalties — now includes skill_features for domain mismatch (Fallback #3)
     penalty_result = apply_penalties(
         candidate=candidate,
         title_features=extracted["title"],
@@ -151,6 +180,7 @@ def _score_one_candidate(candidate) -> tuple:
         career_features=extracted["career"],
         evidence_result=evidence_result,
         consistency_result=consistency_result,
+        skill_features=extracted["skills"],  # Fallback #3 fix
     )
     honeypot_result = detect_honeypot(
         candidate=candidate,
@@ -161,7 +191,7 @@ def _score_one_candidate(candidate) -> tuple:
         consistency_result=consistency_result,
     )
 
-    # Composite Score
+    # Composite Score — location_score passed in (Fallback #2)
     final = compose_score(
         candidate_id=candidate.candidate_id,
         title_score=title_score,
@@ -169,6 +199,7 @@ def _score_one_candidate(candidate) -> tuple:
         experience_score=exp_score,
         education_score=edu_score,
         behavior_score=beh_score,
+        location_score=loc_score,           # Fallback #2 fix
         penalty=penalty_result,
         confidence_result=confidence_result,
         consistency_result=consistency_result,
@@ -181,9 +212,10 @@ def _score_one_candidate(candidate) -> tuple:
         "experience": exp_score,
         "education": edu_score,
         "behavior": beh_score,
+        "location": loc_score,
     }
 
-    return final, component_results
+    return final, component_results, candidate
 
 
 def main() -> None:
@@ -191,23 +223,34 @@ def main() -> None:
 
     print_banner()
 
+    # Validate output path (Fallback #13 — only model_output)
+    output_dir = Path("model_output")
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     dataset = Path(DATASET_PATH)
     if not dataset.exists():
         print(f"\nDataset not found: {DATASET_PATH}")
         return
 
+    # Print JD configuration in use
+    print(f"\n{'=' * 60}")
+    print("JD Configuration (Fallback #1 fix)")
+    print(f"{'=' * 60}")
+    print(f"  Target Title    : {_TARGET_TITLE or 'not set'}")
+    print(f"  Target YoE      : {_TARGET_YOE or 'not set'}")
+    print(f"  Required Skills : {len(_REQUIRED_SKILLS)} skills")
+    print(f"  Preferred Skills: {len(_PREFERRED_SKILLS)} skills")
+    print(f"{'=' * 60}")
+
     run_start = time.time()
     print(f"\n[{_now_str()}] Loading dataset: {DATASET_PATH} ...")
 
-    # Read-only pre-scan, purely for progress/ETA display below.
     total_candidates = _count_lines(dataset)
     if total_candidates is not None:
         print(f"[{_now_str()}] Found ~{total_candidates:,} candidate records.")
 
     # ------------------------------------------------------------------
-    # Stage 1/4 — Score every candidate (single-pass, memory-efficient
-    # streaming). This is the original scoring loop, unmodified, with
-    # progress heartbeats added around it.
+    # Stage 1/4 — Score every candidate
     # ------------------------------------------------------------------
     print(f"\n[{_now_str()}] Stage 1/4: feature extraction + scoring — starting...")
     stage1_start = time.time()
@@ -216,18 +259,19 @@ def main() -> None:
 
     all_finals: list = []
     all_component_results: dict[str, dict] = {}
+    all_candidates_map: dict[str, Candidate] = {}
     count = 0
 
     for candidate in load_candidates(DATASET_PATH):
-        final, component_results = _score_one_candidate(candidate)
+        final, component_results, cand_obj = _score_one_candidate(candidate)
         all_finals.append(final)
         all_component_results[candidate.candidate_id] = component_results
+        all_candidates_map[candidate.candidate_id] = cand_obj
         count += 1
 
         if DEBUG and count <= 3:
             print(f"  [DEBUG] {candidate.candidate_id} → score={final.score:.2f}")
 
-        # --- progress heartbeat (display only; does not affect scoring) ---
         now = time.time()
         if (
             count % HEARTBEAT_EVERY_N == 0
@@ -281,24 +325,27 @@ def main() -> None:
     )
 
     # ------------------------------------------------------------------
-    # Stage 3/4 — Reason Generation
+    # Stage 3/4 — Reason Generation (TOP N ONLY — Fallback #12 fix)
     # ------------------------------------------------------------------
-    print(f"\n[{_now_str()}] Stage 3/4: generating reasons — starting...")
+    print(f"\n[{_now_str()}] Stage 3/4: generating reasons for top {TOP_N_FOR_REASONS} — starting...")
     stage3_start = time.time()
 
+    # Only generate reasons for top-N candidates + buffer (Fallback #12)
+    top_n_limit = TOP_N_FOR_REASONS + TOP_N_BUFFER
     reasons: dict = {}
-    for entry in ranked:
+    for entry in ranked[:top_n_limit]:
         comp = all_component_results.get(entry.candidate_id, {})
-        reasons[entry.candidate_id] = generate_reason(entry.final, comp)
+        cand = all_candidates_map.get(entry.candidate_id)
+        reasons[entry.candidate_id] = generate_reason(entry.final, comp, candidate=cand)
 
     stage3_time = time.time() - stage3_start
     print(
         f"[{_now_str()}] Stage 3/4 done — generated {len(reasons):,} reasons "
-        f"in {_format_elapsed(stage3_time)}"
+        f"in {_format_elapsed(stage3_time)} (saved time by skipping {len(ranked) - top_n_limit:,})"
     )
 
     # ------------------------------------------------------------------
-    # Stage 4/4 — CSV Export
+    # Stage 4/4 — CSV Export (Fallback #13: single output path)
     # ------------------------------------------------------------------
     print(f"\n[{_now_str()}] Stage 4/4: writing CSV — starting...")
     stage4_start = time.time()
@@ -332,7 +379,7 @@ def main() -> None:
     print("Stage timing:")
     print(f"  Feature extraction + scoring : {_format_elapsed(stage1_time)}")
     print(f"  Ranking                      : {_format_elapsed(stage2_time)}")
-    print(f"  Reason generation            : {_format_elapsed(stage3_time)}")
+    print(f"  Reason generation (top-{TOP_N_FOR_REASONS})  : {_format_elapsed(stage3_time)}")
     print(f"  CSV export                   : {_format_elapsed(stage4_time)}")
     print(f"Total runtime    : {_format_elapsed(total_time)}")
     print(f"CSV output       : {output}")

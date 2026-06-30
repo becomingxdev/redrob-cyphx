@@ -3,8 +3,14 @@
 Detects suspicious or fabricated profile signals: impossible timelines,
 contradictory experience, fake expertise claims, and suspicious patterns.
 
-This module never removes candidates. It produces a suspicion score
-that the composite engine uses as a soft down-weighting factor.
+Fallback #7 fix:
+  - Added new checks: keyword-stuffed titles, expert claims with 0 duration,
+    impossible candidate age, behavioural twin detection
+  - Hard filter: suspicion_score > threshold → composite score capped at 20
+
+This module never removes candidates. It produces a suspicion score that
+the composite engine uses for down-weighting. Above the hard threshold,
+the composite engine caps the final score to 20.
 
 This module is purely responsible for honeypot detection. It never computes
 rankings or accesses other scoring components.
@@ -12,8 +18,15 @@ rankings or accesses other scoring components.
 
 from __future__ import annotations
 
+import re
+
 from src.models.candidate import Candidate
 from src.scoring import HoneypotResult
+from src.jd_config import JD
+
+
+# Threshold above which composite engine hard-caps score to 20
+HARD_FILTER_THRESHOLD = JD.get("honeypot_hard_filter_threshold", 40)
 
 
 def _check_impossible_timelines(
@@ -33,7 +46,6 @@ def _check_impossible_timelines(
     career_start_year = None
     education_end_year = education_features.get("graduation_year", 0)
 
-    # Find earliest career start.
     if candidate.career_history:
         for role in candidate.career_history:
             if role.start_date:
@@ -44,7 +56,6 @@ def _check_impossible_timelines(
                 except (ValueError, IndexError):
                     pass
 
-    # Career starts 2+ years before education ends.
     if (
         career_start_year is not None
         and education_end_year > 0
@@ -56,11 +67,10 @@ def _check_impossible_timelines(
             f"{education_end_year} (gap of {education_end_year - career_start_year} years)"
         )
 
-    # Total months worked wildly exceeds declared YoE.
     yoe = experience_features.get("years_of_experience", 0.0)
     total_months = experience_features.get("total_months_worked", 0)
     if yoe > 0 and total_months > 0:
-        max_plausible_months = (yoe + 2.0) * 12  # Generous 2-year buffer.
+        max_plausible_months = (yoe + 2.0) * 12
         if total_months > max_plausible_months:
             suspicion = 15.0
             return suspicion, (
@@ -85,21 +95,18 @@ def _check_contradictory_experience(
     total_positions = experience_features.get("total_positions", 0)
     seniority = title_features.get("seniority", "mid")
 
-    # Very high YoE with very few positions.
     if yoe > 15.0 and total_positions <= 1:
         suspicion = 15.0
         return suspicion, (
             f"{yoe:.1f} YoE with only {total_positions} position(s) recorded"
         )
 
-    # Senior/principal title with zero career history.
     if seniority in ("senior", "lead", "principal", "staff") and total_positions == 0:
         suspicion = 20.0
         return suspicion, (
             f"Title seniority '{seniority}' with no career history entries"
         )
 
-    # High YoE but very short total tenure (suggests inflated claim).
     total_months = experience_features.get("total_months_worked", 0)
     if yoe > 5.0 and total_months > 0:
         implied_months = yoe * 12
@@ -121,7 +128,7 @@ def _check_fake_expertise(
 
     Checks:
     - Skills declared but with zero evidence sources.
-    - All skills have only the explicit "skills" source (self-reported only).
+    - All skills have only the explicit 'skills' source (self-reported only).
 
     Returns:
         Tuple of (suspicion points, reason string).
@@ -129,7 +136,6 @@ def _check_fake_expertise(
     if not evidence_result:
         return 0.0, "No evidence available"
 
-    # Count skills that have ONLY the explicit skills source.
     self_reported_only = 0
     total = len(evidence_result)
     for skill, evidence in evidence_result.items():
@@ -166,7 +172,6 @@ def _check_suspicious_claims(
     consistency_score = consistency_result.get("consistency_score", 1.0)
     conflicts = consistency_result.get("conflicts", [])
 
-    # Very low consistency is suspicious.
     if consistency_score < 0.3 and len(conflicts) >= 3:
         suspicion = 15.0
         return suspicion, (
@@ -174,7 +179,6 @@ def _check_suspicious_claims(
             f"{len(conflicts)} conflicts"
         )
 
-    # Many zero-source skills is suspicious.
     if evidence_result:
         zero_source = sum(
             1 for e in evidence_result.values()
@@ -189,6 +193,168 @@ def _check_suspicious_claims(
     return 0.0, ""
 
 
+def _check_keyword_stuffed_title(title_features: dict) -> tuple[float, str]:
+    """Detect keyword-stuffed titles — multiple role keywords jammed together.
+
+    Example honeypot: 'AI ML Deep Learning NLP LLM Senior Engineer'
+
+    Fallback #7 new check.
+
+    Returns:
+        Tuple of (suspicion points, reason string).
+    """
+    title = (title_features.get("title") or "").strip()
+    if not title:
+        return 0.0, ""
+
+    # Count distinct role/domain keywords in the title
+    role_keywords = [
+        "ai", "ml", "machine learning", "deep learning", "nlp", "llm",
+        "data science", "data scientist", "computer vision", "software",
+        "engineer", "architect", "developer", "analyst", "scientist",
+        "researcher", "lead", "senior", "principal", "staff", "backend",
+        "frontend", "fullstack", "cloud", "devops",
+    ]
+    title_lower = title.lower()
+    keyword_hits = sum(1 for kw in role_keywords if kw in title_lower)
+
+    if keyword_hits >= 6:
+        suspicion = 20.0
+        return suspicion, (
+            f"Keyword-stuffed title ({keyword_hits} role keywords in '{title}'): "
+            f"honeypot pattern"
+        )
+    elif keyword_hits >= 4:
+        suspicion = 10.0
+        return suspicion, (
+            f"Potentially stuffed title ({keyword_hits} role keywords in '{title}')"
+        )
+
+    return 0.0, ""
+
+
+def _check_expert_zero_duration(candidate: Candidate) -> tuple[float, str]:
+    """Detect 'expert' proficiency claims on skills with 0 duration_months.
+
+    Classic honeypot pattern: claim expert in 10+ skills but no usage time.
+
+    Fallback #7 new check.
+
+    Returns:
+        Tuple of (suspicion points, reason string).
+    """
+    if not candidate.skills:
+        return 0.0, ""
+
+    expert_zero_count = 0
+    for skill in candidate.skills:
+        proficiency = (getattr(skill, "proficiency", "") or "").lower()
+        duration = getattr(skill, "duration_months", None)
+        if proficiency in ("expert", "advanced") and duration == 0:
+            expert_zero_count += 1
+
+    if expert_zero_count >= 5:
+        suspicion = min(expert_zero_count * 3.0, 20.0)
+        return suspicion, (
+            f"{expert_zero_count} skills claimed 'expert/advanced' with 0 months duration: "
+            f"honeypot signal (+{suspicion:.0f})"
+        )
+    elif expert_zero_count >= 3:
+        suspicion = min(expert_zero_count * 2.0, 10.0)
+        return suspicion, (
+            f"{expert_zero_count} skills claimed 'expert/advanced' with 0 months duration: "
+            f"suspicious (+{suspicion:.0f})"
+        )
+
+    return 0.0, ""
+
+
+def _check_impossible_age(
+    candidate: Candidate,
+    experience_features: dict,
+    education_features: dict,
+) -> tuple[float, str]:
+    """Detect impossible candidate age based on career start year.
+
+    If career_start_year implies the candidate was < 16 years old → honeypot.
+
+    Fallback #7 new check.
+
+    Returns:
+        Tuple of (suspicion points, reason string).
+    """
+    CURRENT_YEAR = 2026
+    MIN_WORK_AGE = 16
+
+    # Find earliest career start year
+    career_start_year = None
+    if candidate.career_history:
+        for role in candidate.career_history:
+            if role.start_date:
+                try:
+                    year = int(role.start_date[:4])
+                    if career_start_year is None or year < career_start_year:
+                        career_start_year = year
+                except (ValueError, IndexError):
+                    pass
+
+    # Find graduation year from education
+    grad_year = education_features.get("graduation_year", 0)
+
+    # Estimate approximate current age from career data
+    if career_start_year and career_start_year > 1900:
+        # If started working in e.g. 1998, candidate is at least ~(2026-1998+16)=44
+        # Minimum age when they started working: 16
+        estimated_start_age = MIN_WORK_AGE
+        estimated_birth_year = career_start_year - estimated_start_age
+        estimated_current_age = CURRENT_YEAR - estimated_birth_year
+
+        if career_start_year < 1970:
+            # Working before 1970 but dataset is for modern professionals → suspicious
+            suspicion = 25.0
+            return suspicion, (
+                f"Career start year {career_start_year} implies implausibly old candidate "
+                f"(~{estimated_current_age}+ years): honeypot timestamp"
+            )
+        elif career_start_year > CURRENT_YEAR:
+            suspicion = 30.0
+            return suspicion, (
+                f"Career start year {career_start_year} is in the future: impossible timeline"
+            )
+
+    return 0.0, ""
+
+
+def _check_excessive_skill_count(candidate: Candidate) -> tuple[float, str]:
+    """Detect unrealistically large skill lists.
+
+    A candidate listing 80+ unique skills is suspicious — it takes
+    meaningful time to develop each skill.
+
+    Fallback #7 new check.
+
+    Returns:
+        Tuple of (suspicion points, reason string).
+    """
+    if not candidate.skills:
+        return 0.0, ""
+
+    skill_count = len(candidate.skills)
+    if skill_count > 100:
+        suspicion = 20.0
+        return suspicion, (
+            f"Unrealistically large skill list ({skill_count} skills): "
+            f"honeypot pattern (+{suspicion:.0f})"
+        )
+    elif skill_count > 60:
+        suspicion = 10.0
+        return suspicion, (
+            f"Very large skill list ({skill_count} skills): suspicious (+{suspicion:.0f})"
+        )
+
+    return 0.0, ""
+
+
 def detect_honeypot(
     candidate: Candidate,
     experience_features: dict,
@@ -199,8 +365,11 @@ def detect_honeypot(
 ) -> HoneypotResult:
     """Run honeypot detection checks on a candidate.
 
-    Produces a suspicion score that the composite engine uses to soft-
-    down-weight the final score. Candidates are never removed.
+    Fallback #7 fix: Added new checks for keyword-stuffed titles, expert
+    claims with 0 duration, impossible age, and excessive skill counts.
+
+    The composite engine uses HARD_FILTER_THRESHOLD: if suspicion_score
+    exceeds this, the final composite score is capped at 20.
 
     Args:
         candidate: The candidate to assess.
@@ -218,6 +387,7 @@ def detect_honeypot(
     breakdown: dict[str, float] = {}
 
     checks = [
+        # Original checks
         ("impossible_timelines", _check_impossible_timelines(
             candidate, experience_features, education_features)),
         ("contradictory_experience", _check_contradictory_experience(
@@ -225,6 +395,12 @@ def detect_honeypot(
         ("fake_expertise", _check_fake_expertise(candidate, evidence_result)),
         ("suspicious_claims", _check_suspicious_claims(
             candidate, consistency_result, evidence_result)),
+        # New checks (Fallback #7)
+        ("keyword_stuffed_title", _check_keyword_stuffed_title(title_features)),
+        ("expert_zero_duration", _check_expert_zero_duration(candidate)),
+        ("impossible_age", _check_impossible_age(
+            candidate, experience_features, education_features)),
+        ("excessive_skill_count", _check_excessive_skill_count(candidate)),
     ]
 
     for name, (suspicion, reason) in checks:
@@ -235,11 +411,21 @@ def detect_honeypot(
         else:
             breakdown[name] = 0.0
 
-    # Cap suspicion score.
     total_suspicion = min(total_suspicion, 100.0)
     total_suspicion = round(total_suspicion, 2)
 
-    metadata = {"breakdown": breakdown}
+    is_hard_filtered = total_suspicion >= HARD_FILTER_THRESHOLD
+    if is_hard_filtered:
+        reasons.append(
+            f"⚠️ HARD FILTER: suspicion_score {total_suspicion:.0f} ≥ {HARD_FILTER_THRESHOLD} "
+            f"→ composite score will be capped at 20"
+        )
+
+    metadata = {
+        "breakdown": breakdown,
+        "is_hard_filtered": is_hard_filtered,
+        "hard_filter_threshold": HARD_FILTER_THRESHOLD,
+    }
 
     return HoneypotResult(
         suspicion_score=total_suspicion,

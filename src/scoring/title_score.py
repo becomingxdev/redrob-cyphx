@@ -3,6 +3,18 @@
 Evaluates how well a candidate's current title matches the expected target
 title, factoring in seniority alignment and AI/ML relevance.
 
+Fallback #11 fix: When a target_title is provided (JD-aware mode), the
+seniority preference is INVERTED for this IC engineering role:
+  - "senior" → highest bonus (JD wants senior ICs)
+  - "lead/manager/principal/director" → penalty (JD wants code-writers)
+  - "staff" → mild penalty
+  - "mid" → neutral
+  - "junior" → small bonus (potential, still relevant)
+
+The JD says: "People who haven't written production code in the last 18 months
+because they've moved into architecture or tech lead roles — we will probably
+not move forward."
+
 This module is purely responsible for title scoring. It never computes
 rankings or accesses other scoring components.
 """
@@ -19,7 +31,6 @@ from src.scoring import ScoreResult
 _SENIORITY_ORDER: list[str] = ["principal", "staff", "lead", "senior", "mid", "junior"]
 
 # Domain keywords used to detect if career history confirms title domain.
-# FIX 3: Career context validation — match against common AI/ML/engineering terms.
 _CAREER_DOMAIN_KEYWORDS: frozenset[str] = frozenset([
     # AI / ML
     "machine learning", "ml", "deep learning", "nlp", "llm", "ai", "neural",
@@ -30,6 +41,16 @@ _CAREER_DOMAIN_KEYWORDS: frozenset[str] = frozenset([
     "devops", "cloud", "distributed",
     # Analytics
     "analyst", "analytics", "business intelligence", "bi",
+])
+
+# Management/architecture indicators — penalised for IC roles
+_MANAGEMENT_KEYWORDS: frozenset[str] = frozenset([
+    "manager", "director", "vp", "vice president", "cto", "chief",
+    "head of", "engineering manager", "em ",
+])
+
+_ARCHITECT_KEYWORDS: frozenset[str] = frozenset([
+    "architect", "solution architect", "enterprise architect", "technical architect",
 ])
 
 
@@ -57,6 +78,24 @@ def _jaccard_similarity(set_a: set[str], set_b: set[str]) -> float:
     return len(intersection) / len(union)
 
 
+def _is_management_role(title: str) -> bool:
+    """Return True if the title implies a management or pure-management role."""
+    t = title.lower()
+    return any(kw in t for kw in _MANAGEMENT_KEYWORDS)
+
+
+def _is_architect_only_role(title: str, is_manager: bool) -> bool:
+    """Return True if the title is a pure architect role (not IC engineer)."""
+    t = title.lower()
+    if not any(kw in t for kw in _ARCHITECT_KEYWORDS):
+        return False
+    # Hybrid like "ML Architect" who also codes is acceptable
+    # Pure architect without engineering context → flag
+    engineering_markers = ["engineer", "ml", "ai", "data", "software", "platform"]
+    has_engineering_context = any(m in t for m in engineering_markers)
+    return not has_engineering_context
+
+
 def score_title(
     candidate: Candidate,
     title_features: dict,
@@ -65,18 +104,16 @@ def score_title(
 ) -> ScoreResult:
     """Score a candidate's title relevance.
 
+    Fallback #11 fix: When target_title is provided, seniority preference is
+    inverted — senior IC roles score highest; management/principal/lead penalised.
+
     Args:
         candidate: The candidate to score.
         title_features: Output from ``TitleExtractor.extract()``.
         target_title: Optional target job title for exact/close matching.
-            If ``None``, scoring is based purely on signal strength
-            (seniority, AI relevance, completeness).
+            When provided, activates JD-aware IC-engineer seniority scoring.
         career_features: Optional output from ``CareerExtractor.extract()``.
-            When provided, a career-context validation bonus is applied:
-            if the candidate's career history confirms the domain of their
-            claimed title, up to +10 points are awarded. This differentiates
-            candidates with a genuine career track from those with a
-            self-declared title unsupported by work history. (FIX 3)
+            Used for career-context validation bonus.
 
     Returns:
         A ``ScoreResult`` with score in [0, 100].
@@ -98,17 +135,9 @@ def score_title(
         reasons.append(f"Title present: '{title}'")
     else:
         reasons.append("No title provided")
-        return ScoreResult(score=0.0, reasons=reasons, metadata={"title": "", "seniority": "", "is_ai_related": False, "is_manager": False})
-
-    # --- Seniority scoring ---
-    # _SENIORITY_ORDER is most-senior-first, so a LOWER index = MORE senior.
-    # Reward seniority: map index to a bonus where the most senior earns 25.
-    last_index = len(_SENIORITY_ORDER) - 1
-    seniority_idx = _seniority_index(seniority)
-    seniority_rank = last_index - seniority_idx  # higher = more senior
-    seniority_bonus = min(seniority_rank * 5.0, 25.0)
-    score += seniority_bonus
-    reasons.append(f"Seniority '{seniority}': +{seniority_bonus:.1f}")
+        return ScoreResult(score=0.0, reasons=reasons, metadata={
+            "title": "", "seniority": "", "is_ai_related": False, "is_manager": False
+        })
 
     # --- AI/ML relevance bonus ---
     if is_ai_related:
@@ -117,10 +146,59 @@ def score_title(
     else:
         reasons.append("Title not AI/ML related")
 
-    # --- Management bonus (small) ---
-    if is_manager:
-        score += 5.0
-        reasons.append("Management title: +5.0")
+    # --- Seniority scoring ---
+    # Fallback #11: When target_title provided (JD-aware mode), prefer IC "senior"
+    # and penalise management/architecture titles.
+    jd_aware = target_title is not None
+
+    if jd_aware:
+        # JD-specific IC seniority preference
+        title_lower = title.lower()
+
+        # Management roles: JD explicitly rejects these
+        if _is_management_role(title_lower) or is_manager:
+            score -= 15.0
+            reasons.append(f"Management/director title detected for IC role: -15.0")
+        # Pure architect roles
+        elif _is_architect_only_role(title_lower, is_manager):
+            score -= 10.0
+            reasons.append(f"Architecture-only title for IC coding role: -10.0")
+        # Principal/staff: over-senior for hands-on IC role
+        elif seniority in ("principal", "staff"):
+            score -= 5.0
+            reasons.append(f"Seniority '{seniority}' (over-senior for IC role): -5.0")
+        # Lead: ambiguous but leans management
+        elif seniority == "lead":
+            # Small penalty — could be tech lead who still codes
+            score += 5.0
+            reasons.append(f"Seniority 'lead' (possible tech lead): +5.0")
+        # Senior: ideal match for this JD
+        elif seniority == "senior":
+            score += 25.0
+            reasons.append(f"Seniority 'senior' (ideal for IC role): +25.0")
+        # Mid-level: acceptable
+        elif seniority == "mid":
+            score += 10.0
+            reasons.append(f"Seniority 'mid': +10.0")
+        # Junior: lower but not penalised
+        elif seniority == "junior":
+            score += 5.0
+            reasons.append(f"Seniority 'junior': +5.0")
+        else:
+            score += 10.0
+            reasons.append(f"Seniority '{seniority}': +10.0")
+    else:
+        # Generic mode (no JD): original seniority scoring
+        last_index = len(_SENIORITY_ORDER) - 1
+        seniority_idx = _seniority_index(seniority)
+        seniority_rank = last_index - seniority_idx
+        seniority_bonus = min(seniority_rank * 5.0, 25.0)
+        score += seniority_bonus
+        reasons.append(f"Seniority '{seniority}': +{seniority_bonus:.1f}")
+
+        if is_manager:
+            score += 5.0
+            reasons.append("Management title: +5.0")
 
     # --- Target title matching (if provided) ---
     if target_title:
@@ -146,12 +224,8 @@ def score_title(
                 score -= 5.0
                 reasons.append(f"No token overlap with target '{target_title}': -5.0")
 
-    # --- Career context validation bonus (FIX 3) ---
-    # Award up to +10 if the candidate's actual career history confirms the
-    # domain of their claimed title. We use the title_progression list
-    # (past job titles) and industries from CareerExtractor output.
+    # --- Career context validation bonus ---
     if career_features and is_ai_related:
-        # Scan past titles and industries for domain-matching keywords.
         past_titles = career_features.get("title_progression") or []
         industries = career_features.get("industries_worked_in") or []
         career_text = " ".join(
@@ -176,6 +250,7 @@ def score_title(
         "is_ai_related": is_ai_related,
         "is_manager": is_manager,
         "target_title": target_title or None,
+        "jd_aware": jd_aware,
     }
 
     return ScoreResult(score=score, reasons=reasons, metadata=metadata)

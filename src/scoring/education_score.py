@@ -3,6 +3,12 @@
 Evaluates degree level, field relevance, institution quality (rule-based),
 and education count. Education should never dominate ranking.
 
+Fallback #10 fix:
+  - Hard cap at 60 (was 81) — education is a tiebreaker, not the main signal.
+  - Non-CS/AI/Engineering PhD gets only 50% of degree score.
+  - Wildly irrelevant fields (e.g., Chemical Engineering, Biology for an AI role)
+    are penalised rather than ignored.
+
 This module is purely responsible for education scoring. It never computes
 rankings or accesses other scoring components.
 """
@@ -26,13 +32,13 @@ _RELEVANCE_SCORES: dict[str, float] = {
 }
 
 _DEGREE_SCORES: dict[str, float] = {
-    # FIX 6b: raised to give degrees a more meaningful contribution on the 0-100 scale.
-    # Previous values: phd=25, masters=20, bachelors=15, diploma=8, school=3
-    "phd": 40.0,
-    "masters": 30.0,
-    "bachelors": 20.0,
-    "diploma": 10.0,
-    "school": 5.0,
+    # Fallback #10: reduced PhD from 40→30 to limit education dominance.
+    # Non-CS/AI PhD will get 50% of this (see _apply_field_relevance_factor).
+    "phd": 30.0,
+    "masters": 22.0,
+    "bachelors": 16.0,
+    "diploma": 8.0,
+    "school": 4.0,
 }
 
 # Institution tier scores (rule-based).
@@ -54,10 +60,31 @@ _RELEVANT_FIELDS: list[str] = [
     "data science",
     "mathematics",
     "statistics",
-    "engineering",
-    "science",
     "artificial intelligence",
     "machine learning",
+    "electronics",
+    "electrical engineering",
+    "information systems",
+]
+
+# Fields that are NOT relevant to an AI engineering role — degree score halved.
+_IRRELEVANT_FIELDS: list[str] = [
+    "chemical engineering",
+    "civil engineering",
+    "mechanical engineering",
+    "biology",
+    "chemistry",
+    "physics",  # borderline but acceptable for ML
+    "medical",
+    "finance",
+    "accounting",
+    "law",
+    "humanities",
+    "arts",
+    "sociology",
+    "psychology",
+    "management",
+    "marketing",
 ]
 
 
@@ -82,6 +109,10 @@ def _classify_degree(degree: str) -> str:
 def _field_relevance(field_of_study: str, candidate_skills: set[str]) -> tuple[float, str]:
     """Assess relevance of the field of study.
 
+    Fallback #10: Irrelevant fields now return a small score (not the same as
+    relevant fields). The degree score itself is halved separately for
+    truly irrelevant PhDs.
+
     Returns:
         Tuple of (relevance score, reason string).
     """
@@ -89,6 +120,11 @@ def _field_relevance(field_of_study: str, candidate_skills: set[str]) -> tuple[f
         return 0.0, "No field of study recorded"
 
     field_lower = field_of_study.lower()
+
+    # Check for explicitly irrelevant fields first.
+    is_irrelevant = any(irr in field_lower for irr in _IRRELEVANT_FIELDS)
+    if is_irrelevant:
+        return 1.0, f"Field '{field_of_study}' not relevant to AI engineering role"
 
     # Direct keyword match against relevant fields.
     is_relevant = any(rf in field_lower for rf in _RELEVANT_FIELDS)
@@ -102,9 +138,39 @@ def _field_relevance(field_of_study: str, candidate_skills: set[str]) -> tuple[f
         skill_words.update(re.findall(r"\b\w+\b", skill.lower()))
     overlap = field_words & skill_words
     if len(overlap) >= 2:
-        return 7.0, f"Field '{field_of_study}' partially relevant (shares {len(overlap)} terms with skills)"
+        return 6.0, f"Field '{field_of_study}' partially relevant (shares {len(overlap)} terms with skills)"
 
-    return 3.0, f"Field '{field_of_study}' has low direct relevance"
+    return 2.0, f"Field '{field_of_study}' has low direct relevance"
+
+
+def _apply_field_relevance_factor(
+    degree_score: float,
+    field_of_study: str,
+    degree_bucket: str,
+) -> tuple[float, str | None]:
+    """Halve the degree score for PhDs/Masters in non-CS/AI fields.
+
+    Fallback #10: A PhD in Chemical Engineering should not outscore
+    a B.Tech in CS for an AI Engineering role.
+
+    Returns:
+        Tuple of (adjusted degree score, optional reason string).
+    """
+    if not field_of_study:
+        return degree_score, None
+
+    field_lower = field_of_study.lower()
+    is_irrelevant = any(irr in field_lower for irr in _IRRELEVANT_FIELDS)
+    if not is_irrelevant:
+        return degree_score, None
+
+    if degree_bucket in ("phd", "masters"):
+        adjusted = degree_score * 0.5
+        return adjusted, (
+            f"Degree score halved: {degree_bucket.upper()} in '{field_of_study}' "
+            f"not relevant to AI engineering (was {degree_score:.1f} → {adjusted:.1f})"
+        )
+    return degree_score, None
 
 
 def score_education(
@@ -145,8 +211,16 @@ def score_education(
     # --- Degree level scoring ---
     degree_bucket = _classify_degree(highest_degree)
     degree_score = _DEGREE_SCORES.get(degree_bucket, 5.0)
+
+    # Fallback #10: halve degree score for irrelevant fields (PhD in ChemEng etc.)
+    adjusted_degree_score, field_adj_reason = _apply_field_relevance_factor(
+        degree_score, field_of_study, degree_bucket
+    )
+    degree_score = adjusted_degree_score
     score += degree_score
     reasons.append(f"Highest degree '{highest_degree}' ({degree_bucket or 'unknown'}): +{degree_score:.1f}")
+    if field_adj_reason:
+        reasons.append(field_adj_reason)
 
     # --- Institution tier scoring ---
     tier_lower = (education_tier or "").lower().strip()
@@ -168,10 +242,11 @@ def score_education(
         score += multi_bonus
         reasons.append(f"Multiple degrees ({education_count}): +{multi_bonus:.1f}")
 
-    # FIX 6b: Hard cap (was 50.0) removed. Score is now bounded by the
-    # natural sub-score sums: degree(40) + tier(20) + relevance(15) +
-    # multi-degree bonus(6) ≈ 81 max for an exceptional academic profile.
-    score = max(0.0, min(100.0, round(score, 2)))
+    # Fallback #10: Hard cap at 60. Education is a soft tiebreaker.
+    # Natural max for CS PhD from tier_1 with relevant field:
+    #   degree(30) + tier(20) + relevance(10) + multi-bonus(6) = 66 → capped at 60.
+    # PhD in ChemEng from tier_1: (30*0.5=15) + 20 + 1 + 3 = 39 (well under cap).
+    score = max(0.0, min(60.0, round(score, 2)))
 
     metadata = {
         "degree": highest_degree,

@@ -9,7 +9,7 @@ Pseudo-flow:
         → confidence adjustment
         → consistency bonus
         → penalty multiplier
-        → honeypot multiplier
+        → honeypot multiplier (+ hard cap at 20 for high-suspicion)
         → final score
 
 This module does NOT sort or rank candidates.
@@ -134,9 +134,13 @@ def _apply_honeypot_multiplier(
     honeypot: HoneypotResult,
     honeypot_multiplier: float,
 ) -> float:
-    """Apply a soft honeypot down-weighting multiplier.
+    """Apply a honeypot down-weighting multiplier with hard filter.
 
-    Higher suspicion reduces the score, but never eliminates the candidate.
+    Fallback #7 fix: If suspicion_score exceeds the hard filter threshold
+    (from jd_config.yaml), the score is hard-capped at 20.0, effectively
+    excluding the candidate from the top-100 rankings.
+
+    For scores below the threshold, a soft multiplier is applied.
 
     Args:
         score: The score after penalty adjustment.
@@ -149,9 +153,14 @@ def _apply_honeypot_multiplier(
     if honeypot.suspicion_score <= 0:
         return score
 
-    # Map suspicion (0-100) to a multiplier (1.0 down to 0.5).
+    # Hard filter (Fallback #7)
+    is_hard_filtered = (honeypot.metadata or {}).get("is_hard_filtered", False)
+    if is_hard_filtered:
+        return min(score, 20.0)  # Hard cap — candidate excluded from top-100
+
+    # Soft multiplier for lower suspicion scores
     suspicion_factor = 1.0 - (honeypot.suspicion_score / 200.0) * honeypot_multiplier
-    suspicion_factor = max(0.3, suspicion_factor)  # Never reduce below 30%.
+    suspicion_factor = max(0.4, suspicion_factor)  # Never reduce below 40%.
 
     return score * suspicion_factor
 
@@ -167,19 +176,20 @@ def compose_score(
     confidence_result: dict,
     consistency_result: dict,
     honeypot: HoneypotResult,
+    location_score: ScoreResult | None = None,
     weights: dict[str, float] | None = None,
 ) -> FinalScore:
     """Compose all scoring components into a single final score.
 
-    This is the ONLY place where components are combined. No sorting
-    or ranking is performed.
+    Fallback #7 fix: honeypot hard filter now caps score at 20 for
+    candidates exceeding the suspicion threshold.
 
     Pseudo-flow:
         weighted_score
             → confidence_adjustment
             → consistency_bonus
             → penalty_multiplier
-            → honeypot_multiplier
+            → honeypot_multiplier (+ hard cap)
             → final_score
 
     Args:
@@ -193,6 +203,7 @@ def compose_score(
         confidence_result: Output from ``ConfidenceCalculator.calculate()``.
         consistency_result: Output from ``ConsistencyAnalyzer.analyze()``.
         honeypot: Output from the honeypot engine.
+        location_score: Optional output from the location scoring engine.
         weights: Optional weight overrides. If ``None``, loads from config.
 
     Returns:
@@ -209,6 +220,8 @@ def compose_score(
         "education": education_score,
         "behavior": behavior_score,
     }
+    if location_score is not None and "location" in weights:
+        component_scores["location"] = location_score
 
     # --- Step 1: Weighted score ---
     raw_score = _compute_weighted_score(component_scores, weights)
