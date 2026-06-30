@@ -245,9 +245,8 @@ def main() -> None:
     run_start = time.time()
     print(f"\n[{_now_str()}] Loading dataset: {DATASET_PATH} ...")
 
-    total_candidates = _count_lines(dataset)
-    if total_candidates is not None:
-        print(f"[{_now_str()}] Found ~{total_candidates:,} candidate records.")
+    total_candidates = None
+    print(f"[{_now_str()}] Processing candidates...")
 
     # ------------------------------------------------------------------
     # Stage 1/4 — Score every candidate

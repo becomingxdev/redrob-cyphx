@@ -71,7 +71,7 @@ def write_submission_csv(
             writer.writerow([
                 entry.candidate_id,
                 entry.rank,
-                f"{entry.final_score:.2f}",
+                f"{entry.final_score / 100:.4f}",  # spec expects 0–1 range; internal scores are 0–100
                 reasoning_text,
             ])
 

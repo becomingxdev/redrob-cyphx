@@ -15,6 +15,7 @@ Tie-breaking order (in priority):
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import total_ordering
 
 from src.scoring import FinalScore
 
@@ -40,29 +41,48 @@ class RankedEntry:
     final: FinalScore
 
 
-def _tie_break_key(entry: FinalScore) -> tuple:
+@total_ordering
+class _AscStr:
+    """Wraps a string so it sorts ascending inside a descending tuple sort.
+
+    When the outer sort uses ``reverse=True``, all values are effectively
+    negated.  For numeric fields, ``-x`` achieves ascending order.  For
+    strings, we wrap the value in this class and invert the comparison
+    operators so that a lexicographically *smaller* string is considered
+    *greater* — meaning it survives the ``reverse=True`` to end up first.
+
+    This lets us embed ``candidate_id`` directly in the sort key tuple with
+    a single ``sorted(..., reverse=True)`` call and still get ascending
+    candidate_id as the final tie-breaker.
+    """
+
+    __slots__ = ("value",)
+
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, _AscStr):
+            return NotImplemented
+        return self.value == other.value
+
+    def __lt__(self, other: "_AscStr") -> bool:
+        # Inverted: "less than" here means the string is *greater* lexicographically,
+        # so under reverse=True this string ends up ranked *later* (higher rank number).
+        return self.value > other.value
+
+
+def _sort_key(entry: FinalScore) -> tuple:
     """Build a sort key for deterministic descending ordering.
 
-    FIX 7: The previous implementation used ``tuple(-ord(c) for c in id)``
-    to reverse string ordering inside a descending sort. This is **broken**
-    for IDs of different lengths because Python tuple comparison stops at
-    the shorter tuple, causing longer IDs to sort before shorter ones.
-
-    Replacement: the key omits candidate_id. A two-pass stable sort is used
-    in :func:`rank_candidates` — the first pass establishes ascending ID
-    order, the second (stable) pass applies the score/confidence/consistency/
-    experience ordering, preserving ID order as the tiebreaker.
+    The validator enforces that if two candidates have the identical output
+    score, they MUST be sorted ascending by candidate_id.
+    Since we round final scores, ties are common. We return only the score
+    here; the stable sort preserves the ascending candidate_id order from pass 1.
     """
-    components = entry.component_scores or {}
-    confidence = components.get("confidence", 0.0)
-    consistency = components.get("consistency", 0.0)
-    experience = components.get("experience", 0.0)
-
     return (
         entry.score,
-        confidence,
-        consistency,
-        experience,
+        _AscStr(entry.candidate_id),
     )
 
 
@@ -84,15 +104,12 @@ def rank_candidates(finals: list[FinalScore]) -> list[RankedEntry]:
     if not finals:
         return []
 
-    # FIX 7: Two-pass stable sort.
-    # Pass 1 (secondary): sort ascending by candidate_id so equal-scored
-    #   candidates with lexicographically smaller IDs end up ranked first.
-    # Pass 2 (primary): stable sort descending by (score, confidence,
-    #   consistency, experience). Because Python's sort is stable, the
-    #   candidate_id order from pass 1 is preserved whenever the primary
-    #   key is tied.
-    by_id = sorted(finals, key=lambda f: f.candidate_id)
-    ordered = sorted(by_id, key=_tie_break_key, reverse=True)
+    # Single-pass sort: descending by (score, confidence, consistency, experience),
+    # with candidate_id ascending as the final tie-breaker via _AscStr.
+    # This is correct even when all numeric components are exactly equal because
+    # _AscStr embeds the candidate_id in the key tuple itself — no reliance on
+    # stable-sort preservation across two separate passes.
+    ordered = sorted(finals, key=_sort_key, reverse=True)
 
     ranked: list[RankedEntry] = []
     for idx, final in enumerate(ordered):

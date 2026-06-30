@@ -262,7 +262,7 @@ class _SkillCollector:
                 if len(phrase) < self._min_token_len:
                     continue
                 if self._is_soft_skill(phrase):
-                    break
+                    continue
                 # Match against: alias map keys, canonical value names, or
                 # skills already recorded (handles explicit skills list entries).
                 if phrase in self._lookup_set or phrase in self._registry:
